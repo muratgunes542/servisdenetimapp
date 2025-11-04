@@ -1,15 +1,251 @@
+import 'dart:io';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '/utils/constants.dart';
 
-// services/database_service.dart - Yeni metodlar ekle
 class DatabaseService {
   final SupabaseClient _supabase = Supabase.instance.client;
 
-  // GERÇEK araç ekleme
+  // BURAYA KENDİ SUPABASE BİLGİLERİNİZİ EKLEYİN
+  static const String _supabaseUrl = 'https://zxhvyfbzhuvbcnuxsaxq.supabase.co'; // SUPABASE_URL'niz
+  static const String _apiKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp4aHZ5ZmJ6aHV2YmNudXhzYXhxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2ODg5MzMsImV4cCI6MjA3NTI2NDkzM30.rFB-7LP_ccNWrPXIpfTuwAW9zdgRXeX0w79kra5P0uQ'; // ANON_KEY'iniz
+
+  static Map<String, String> get _headers => {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer $_apiKey',
+    'apikey': _apiKey,
+    'Prefer': 'return=representation',
+  };
+
+  // MEB ağı için özel HTTP client
+  static http.Client _createMebClient() {
+    var ioClient = HttpClient();
+    ioClient.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      // Sadece Supabase için sertifika doğrulamasını atla
+      return host.contains('supabase.co');
+    };
+
+    // Timeout ayarları
+    ioClient.connectionTimeout = Duration(seconds: 10);
+    return IOClient(ioClient);
+  }
+
+  // Akıllı bağlantı metodu - MEB ağını tespit et
+  Future<http.Client> _getHttpClient() async {
+    try {
+      // MEB ağında mı kontrol et
+      final testClient = _createMebClient();
+      final testResponse = await testClient.get(
+        Uri.parse('$_supabaseUrl/rest/v1/vehicles?select=*&limit=1'),
+        headers: _headers,
+      ).timeout(Duration(seconds: 5));
+
+      // Eğer başarılıysa MEB client'ını kullan
+      if (testResponse.statusCode == 200) {
+        print('🔍 MEB ağı tespit edildi, özel client kullanılıyor');
+        return testClient;
+      }
+    } catch (e) {
+      print('🔍 Normal ağ tespit edildi, standart client kullanılıyor');
+    }
+
+    // Normal ağda standart client
+    return http.Client();
+  }
+
+  // HYBRID GET metodları
+  Future<List<Map<String, dynamic>>> getAllVehicles() async {
+    http.Client? client;
+
+    try {
+      client = await _getHttpClient();
+
+      final response = await client.get(
+        Uri.parse('$_supabaseUrl/rest/v1/vehicles?select=*'),
+        headers: _headers,
+      ).timeout(Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        print('✅ HTTP getAllVehicles başarılı: ${data.length} araç');
+        return data.cast<Map<String, dynamic>>();
+      } else {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      }
+    } catch (e) {
+      print('❌ HTTP getAllVehicles başarısız, Supabase fallback: $e');
+
+      // Fallback: normal Supabase client
+      try {
+        final response = await _supabase
+            .from('vehicles')
+            .select('*')
+            .order('created_at', ascending: false);
+        print('✅ Supabase getAllVehicles fallback: ${response.length} araç');
+        return response;
+      } catch (supabaseError) {
+        print('❌ Tüm bağlantı yöntemleri başarısız: $supabaseError');
+        return [];
+      }
+    } finally {
+      client?.close();
+    }
+  }
+
+  // Kullanıcı araçlarını getir - HYBRID
+  Future<List<Map<String, dynamic>>> getUserVehicles(String userId) async {
+    try {
+      // HTTP ile dene
+      final response = await http.get(
+        Uri.parse('$_supabaseUrl/rest/v1/vehicles?select=*&created_by=eq.$userId'),
+        headers: _headers,
+      );
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        print('✅ HTTP getUserVehicles başarılı: ${data.length} araç');
+        return data.cast<Map<String, dynamic>>();
+      } else {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      }
+    } catch (e) {
+      print('❌ HTTP getUserVehicles başarısız, fallback: $e');
+      // Fallback: normal Supabase client
+      final response = await _supabase
+          .from('vehicles')
+          .select('*')
+          .eq('created_by', userId)
+          .order('created_at', ascending: false);
+      print('✅ Supabase getUserVehicles fallback: ${response.length} araç');
+      return response;
+    }
+  }
+
+  // Araç onayla - HYBRID
+  Future<void> approveVehicle(String vehicleId, String approvedBy) async {
+    try {
+      // HTTP ile dene
+      final response = await http.patch(
+        Uri.parse('$_supabaseUrl/rest/v1/vehicles?id=eq.$vehicleId'),
+        headers: _headers,
+        body: json.encode({
+          'is_approved': true,
+          'approved_by': approvedBy,
+          'approved_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        }),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        print('✅ HTTP approveVehicle başarılı: $vehicleId');
+        return;
+      } else {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      }
+    } catch (e) {
+      print('❌ HTTP approveVehicle başarısız, fallback: $e');
+      // Fallback: normal Supabase client
+      await _supabase
+          .from('vehicles')
+          .update({
+        'is_approved': true,
+        'approved_by': approvedBy,
+        'approved_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      })
+          .eq('id', vehicleId);
+      print('✅ Supabase approveVehicle fallback: $vehicleId');
+    }
+  }
+
+  // Araç reddet - HYBRID
+  Future<void> rejectVehicle(String vehicleId, String rejectedBy, String reason) async {
+    try {
+      // HTTP ile dene
+      final response = await http.patch(
+        Uri.parse('$_supabaseUrl/rest/v1/vehicles?id=eq.$vehicleId'),
+        headers: _headers,
+        body: json.encode({
+          'is_approved': false,
+          'rejection_reason': reason,
+          'approved_by': rejectedBy,
+          'approved_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        }),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        print('✅ HTTP rejectVehicle başarılı: $vehicleId');
+        return;
+      } else {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      }
+    } catch (e) {
+      print('❌ HTTP rejectVehicle başarısız, fallback: $e');
+      // Fallback: normal Supabase client
+      await _supabase
+          .from('vehicles')
+          .update({
+        'is_approved': false,
+        'rejection_reason': reason,
+        'approved_by': rejectedBy,
+        'approved_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      })
+          .eq('id', vehicleId);
+      print('✅ Supabase rejectVehicle fallback: $vehicleId');
+    }
+  }
+
+  // Onayı geri al - HYBRID
+  Future<void> unapproveVehicle(String vehicleId, String userId) async {
+    try {
+      // HTTP ile dene
+      final response = await http.patch(
+        Uri.parse('$_supabaseUrl/rest/v1/vehicles?id=eq.$vehicleId'),
+        headers: _headers,
+        body: json.encode({
+          'is_approved': false,
+          'approved_by': null,
+          'approved_at': null,
+          'rejection_reason': null,
+          'updated_at': DateTime.now().toIso8601String(),
+          'updated_by': userId,
+        }),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        print('✅ HTTP unapproveVehicle başarılı: $vehicleId');
+        return;
+      } else {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      }
+    } catch (e) {
+      print('❌ HTTP unapproveVehicle başarısız, fallback: $e');
+      // Fallback: normal Supabase client
+      await _supabase
+          .from('vehicles')
+          .update({
+        'is_approved': false,
+        'approved_by': null,
+        'approved_at': null,
+        'rejection_reason': null,
+        'updated_at': DateTime.now().toIso8601String(),
+        'updated_by': userId,
+      })
+          .eq('id', vehicleId);
+      print('✅ Supabase unapproveVehicle fallback: $vehicleId');
+    }
+  }
+
+  // === NORMAL SUPABASE METODLAR (Constants olmadan) ===
+
+  // Araç oluştur
   Future<Map<String, dynamic>> createVehicle({
     required String plate,
     required String model,
-    required int modelYear, // BU SATIRI EKLE
+    required int modelYear,
     required int capacity,
     required String driverName,
     required String transportType,
@@ -26,11 +262,11 @@ class DatabaseService {
     try {
       // Önce aracı oluştur
       final vehicle = await _supabase
-          .from(Constants.vehiclesTable)
+          .from('vehicles')
           .insert({
         'plate': plate.toUpperCase(),
         'model': model,
-        'model_year': modelYear, // BU SATIRI EKLE
+        'model_year': modelYear,
         'capacity': capacity,
         'driver_name': driverName,
         'driver_phone': driverPhone,
@@ -55,7 +291,7 @@ class DatabaseService {
               .from('vehicle_schools')
               .insert({
             'vehicle_id': vehicle['id'],
-            'school_id': int.parse(schoolId), // Integer'a çevir
+            'school_id': int.parse(schoolId),
             'created_at': DateTime.now().toIso8601String(),
           });
         }
@@ -68,12 +304,12 @@ class DatabaseService {
     }
   }
 
-  // GERÇEK araç güncelleme
+  // Araç güncelle
   Future<Map<String, dynamic>> updateVehicle({
     required dynamic vehicleId,
     required String plate,
     required String model,
-    required int modelYear, // BU SATIRI EKLE
+    required int modelYear,
     required int capacity,
     required String driverName,
     required String transportType,
@@ -91,11 +327,11 @@ class DatabaseService {
       final id = vehicleId is String ? vehicleId : vehicleId.toString();
 
       final vehicle = await _supabase
-          .from(Constants.vehiclesTable)
+          .from('vehicles')
           .update({
         'plate': plate.toUpperCase(),
         'model': model,
-        'model_year': modelYear, // BU SATIRI EKLE
+        'model_year': modelYear,
         'capacity': capacity,
         'driver_name': driverName,
         'driver_phone': driverPhone,
@@ -124,8 +360,8 @@ class DatabaseService {
           await _supabase
               .from('vehicle_schools')
               .insert({
-            'vehicle_id': int.parse(id), // vehicle_id integer
-            'school_id': int.parse(schoolId), // school_id integer
+            'vehicle_id': int.parse(id),
+            'school_id': int.parse(schoolId),
             'created_at': DateTime.now().toIso8601String(),
           });
         }
@@ -138,51 +374,7 @@ class DatabaseService {
     }
   }
 
-  // GERÇEK araç onaylama
-  Future<void> approveVehicle(dynamic vehicleId, String approvedBy) async {
-    try {
-      final id = vehicleId is String ? vehicleId : vehicleId.toString();
-
-      await _supabase
-          .from(Constants.vehiclesTable)
-          .update({
-        'is_approved': true,
-        'approved_by': approvedBy,
-        'approved_at': DateTime.now().toIso8601String(),
-      })
-          .eq('id', id);
-
-      print('✅ Araç onaylandı: $id, onaylayan: $approvedBy');
-    } catch (e) {
-      print('❌ Araç onaylama hatası: $e');
-      print('• Hata detayı: ${e.toString()}');
-      rethrow;
-    }
-  }
-
-  // services/database_service.dart - Red metodu ekle
-  Future<void> rejectVehicle(dynamic vehicleId, String rejectedBy, String reason) async {
-    try {
-      final id = vehicleId is String ? vehicleId : vehicleId.toString();
-
-      await _supabase
-          .from(Constants.vehiclesTable)
-          .update({
-        'is_approved': false,
-        'rejection_reason': reason,
-        'rejected_by': rejectedBy,
-        'rejected_at': DateTime.now().toIso8601String(),
-      })
-          .eq('id', id);
-
-      print('✅ Araç reddedildi: $id, sebep: $reason');
-    } catch (e) {
-      print('❌ Araç reddetme hatası: $e');
-      rethrow;
-    }
-  }
-
-  // GERÇEK araç silme
+  // Araç sil
   Future<void> deleteVehicle(dynamic vehicleId) async {
     try {
       final id = vehicleId is String ? vehicleId : vehicleId.toString();
@@ -195,7 +387,7 @@ class DatabaseService {
 
       // Sonra aracı sil
       await _supabase
-          .from(Constants.vehiclesTable)
+          .from('vehicles')
           .delete()
           .eq('id', id);
     } catch (e) {
@@ -238,71 +430,48 @@ class DatabaseService {
     }
   }
 
-  // services/database_service.dart - Okula özel araçları getir
+  // Okul kullanıcısının araçlarını getir
   Future<List<Map<String, dynamic>>> getSchoolVehicles(String schoolId) async {
     try {
       final response = await _supabase
           .from('vehicle_schools')
           .select('''
-          vehicles (*)
-        ''')
-          .eq('school_id', schoolId)
-          .order('created_at', ascending: false);
+            vehicles (*)
+          ''')
+          .eq('school_id', schoolId);
 
-      // Güvenli type conversion
-      return response.map<Map<String, dynamic>>((item) {
-        final vehicle = item['vehicles'];
-        if (vehicle is Map<String, dynamic>) {
-          return vehicle;
-        } else if (vehicle is Map) {
-          return Map<String, dynamic>.from(vehicle as Map);
-        } else {
-          return {};
+      List<Map<String, dynamic>> vehicles = [];
+      for (var item in response) {
+        if (item['vehicles'] != null) {
+          vehicles.add(item['vehicles']);
         }
-      }).where((vehicle) => vehicle.isNotEmpty).toList();
-
-    } catch (e) {
-      print('Okul araçları getirme hatası: $e');
-      return [];
-    }
-  }
-
-
-
-  // Araç kaydı oluştur veya getir
-  Future<Map<String, dynamic>> getOrCreateVehicle(String plate, {String? model, int? capacity}) async {
-    try {
-      // Önce araç var mı kontrol et
-      final response = await _supabase
-          .from(Constants.vehiclesTable)
-          .select()
-          .eq('plate', plate.toUpperCase());
-
-      if (response.isNotEmpty && response[0] != null) {
-        return response[0];
       }
 
-      // Yeni araç oluştur
-      final newVehicle = await _supabase
-          .from(Constants.vehiclesTable)
-          .insert({
-        'plate': plate.toUpperCase(),
-        'model': model,
-        'capacity': capacity,
-        'created_at': DateTime.now().toIso8601String(),
-      })
-          .select()
-          .single();
-
-      return newVehicle;
+      return vehicles;
     } catch (e) {
-      print('Araç oluşturma hatası: $e');
-      rethrow;
+      print('Okul araçları getirme hatası: $e');
+      throw e;
     }
   }
 
-  // Denetim kaydı oluştur - SÜRELİ EVRAK DESTEKLİ
-  // Denetim kaydı oluştur - DÜZELTMELİ
+  // Onaya gönder
+  Future<void> sendVehicleForApproval(String vehicleId) async {
+    try {
+      await _supabase
+          .from('vehicles')
+          .update({
+        'is_approved': false,
+        'rejection_reason': null,
+        'updated_at': DateTime.now().toIso8601String(),
+      })
+          .eq('id', vehicleId);
+    } catch (e) {
+      print('Onaya gönderme hatası: $e');
+      throw e;
+    }
+  }
+
+  // Denetim oluştur
   Future<Map<String, dynamic>> createInspection({
     required String vehiclePlate,
     required String inspectorName,
@@ -315,18 +484,16 @@ class DatabaseService {
 
       // Toplam skor ve durum hesapla
       final compliantItems = inspectionItems.where((item) => item['is_compliant'] == true).length;
-      final totalItems = inspectionItems.length;
       final status = _calculateStatus(inspectionItems);
 
-      // Denetim kaydı oluştur - TOTAL_ITEMS ALANINI KALDIRIYORUZ
+      // Denetim kaydı oluştur
       final inspection = await _supabase
-          .from(Constants.inspectionsTable)
+          .from('inspections')
           .insert({
         'vehicle_id': vehicle['id'],
         'inspector_name': inspectorName,
         'inspection_date': DateTime.now().toIso8601String(),
         'total_score': compliantItems,
-        // 'total_items': totalItems, // BU SATIRI KALDIRIYORUZ - Tabloda yok
         'status': status,
         'driver_signature': driverSignature,
         'created_at': DateTime.now().toIso8601String(),
@@ -337,7 +504,7 @@ class DatabaseService {
       // Denetim detaylarını kaydet
       for (final item in inspectionItems) {
         await _supabase
-            .from(Constants.inspectionDetailsTable)
+            .from('inspection_details')
             .insert({
           'inspection_id': inspection['id'],
           'item_number': item['item_number'],
@@ -360,6 +527,39 @@ class DatabaseService {
     }
   }
 
+  // Araç getir veya oluştur
+  Future<Map<String, dynamic>> getOrCreateVehicle(String plate, {String? model, int? capacity}) async {
+    try {
+      // Önce araç var mı kontrol et
+      final response = await _supabase
+          .from('vehicles')
+          .select()
+          .eq('plate', plate.toUpperCase());
+
+      if (response.isNotEmpty && response[0] != null) {
+        return response[0];
+      }
+
+      // Yeni araç oluştur
+      final newVehicle = await _supabase
+          .from('vehicles')
+          .insert({
+        'plate': plate.toUpperCase(),
+        'model': model,
+        'capacity': capacity,
+        'created_at': DateTime.now().toIso8601String(),
+      })
+          .select()
+          .single();
+
+      return newVehicle;
+    } catch (e) {
+      print('Araç oluşturma hatası: $e');
+      rethrow;
+    }
+  }
+
+  // Denetim durumu hesapla
   String _calculateStatus(List<Map<String, dynamic>> items) {
     final compliantCount = items.where((item) => item['is_compliant'] == true).length;
     final totalCount = items.length;
@@ -370,11 +570,11 @@ class DatabaseService {
     return 'non_compliant';
   }
 
-  // Geçmiş denetimleri getir
+  // Diğer metodlar...
   Future<List<Map<String, dynamic>>> getInspectionsByVehicle(String plate) async {
     try {
       final response = await _supabase
-          .from(Constants.inspectionsTable)
+          .from('inspections')
           .select('''
             *,
             vehicles!inner(plate, model, capacity)
@@ -389,11 +589,10 @@ class DatabaseService {
     }
   }
 
-  // Tüm denetimleri getir
   Future<List<Map<String, dynamic>>> getAllInspections() async {
     try {
       final response = await _supabase
-          .from(Constants.inspectionsTable)
+          .from('inspections')
           .select('''
             *,
             vehicles(plate, model, capacity)
@@ -403,67 +602,6 @@ class DatabaseService {
       return response;
     } catch (e) {
       print('Tüm denetimleri getirme hatası: $e');
-      return [];
-    }
-  }
-
-  // Süresi dolmak üzere olan denetimleri getir
-  Future<List<Map<String, dynamic>>> getExpiringInspections() async {
-    try {
-      final thirtyDaysFromNow = DateTime.now().add(Duration(days: 30)).toIso8601String();
-
-      final response = await _supabase
-          .from(Constants.inspectionDetailsTable)
-          .select('''
-            *,
-            inspections!inner(
-              inspection_date,
-              vehicles!inner(plate, model)
-            )
-          ''')
-          .lt('selected_date', thirtyDaysFromNow)
-          .gt('selected_date', DateTime.now().toIso8601String())
-          .eq('is_critical_date', true);
-
-      return response;
-    } catch (e) {
-      print('Süresi dolan denetimleri getirme hatası: $e');
-      return [];
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> getAllVehicles() async {
-    try {
-      final response = await _supabase
-          .from(Constants.vehiclesTable)
-          .select()
-          .order('plate');
-
-      return response;
-    } catch (e) {
-      print('Araç getirme hatası: $e');
-      return [];
-    }
-  }
-
-  // Süresi dolmuş denetimleri getir
-  Future<List<Map<String, dynamic>>> getExpiredInspections() async {
-    try {
-      final response = await _supabase
-          .from(Constants.inspectionDetailsTable)
-          .select('''
-            *,
-            inspections!inner(
-              inspection_date,
-              vehicles!inner(plate, model)
-            )
-          ''')
-          .lt('selected_date', DateTime.now().toIso8601String())
-          .eq('is_critical_date', true);
-
-      return response;
-    } catch (e) {
-      print('Süresi dolmuş denetimleri getirme hatası: $e');
       return [];
     }
   }

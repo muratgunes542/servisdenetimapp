@@ -1,5 +1,6 @@
 // screens/ilce_vehicles_screen.dart
 import 'package:flutter/material.dart';
+import '../models/vehicle.dart';
 import 'vehicle_approval_screen.dart';
 import '/services/database_service.dart';
 import '/services/auth_service.dart';
@@ -14,6 +15,8 @@ class IlceVehiclesScreen extends StatefulWidget {
 
 class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
   final DatabaseService _dbService = DatabaseService();
+  //final HybridService _hybridService = HybridService(); // YENİ
+
   final AuthService _authService = AuthService();
 
   List<Map<String, dynamic>> _vehicles = [];
@@ -22,6 +25,8 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
   String _searchQuery = '';
   String _filterStatus = 'all';
   int _pendingCount = 0;
+
+  get isRejected => null;
 
   @override
   void initState() {
@@ -32,6 +37,7 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
   Future<void> _loadVehicles() async {
     try {
       final vehicles = await _dbService.getAllVehicles();
+      //final vehicles = await _hybridService.getVehicles(); // YENİ
       setState(() {
         _vehicles = vehicles;
         _filteredVehicles = vehicles;
@@ -97,6 +103,93 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
     });
   }
 
+  // Onayı geri alma
+  void _unapproveVehicle(Map<String, dynamic> vehicle) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Onayı Geri Al'),
+        content: Text('${vehicle['plate']} plakalı aracın onayını geri almak istediğinizden emin misiniz? Araç tekrar onay bekler duruma geçecek.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('İptal'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _performUnapprove(vehicle);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: Text('GERİ AL'),
+          ),
+        ],
+      ),
+    );
+  }
+
+// Onaylı aracı reddetme
+  void _rejectApprovedVehicle(Map<String, dynamic> vehicle) {
+    final reasonController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Onaylı Aracı Reddet'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${vehicle['plate']} plakalı ONAYLI aracı reddetmek istediğinizden emin misiniz?'),
+            SizedBox(height: 16),
+            Text('Red Sebebi:'),
+            SizedBox(height: 8),
+            TextField(
+              controller: reasonController,
+              decoration: InputDecoration(
+                hintText: 'Red sebebini yazın...',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('İptal'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (reasonController.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Lütfen red sebebi yazın')),
+                );
+                return;
+              }
+              Navigator.pop(context);
+              _performRejection(vehicle, reasonController.text.trim());
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: Text('REDDET'),
+          ),
+        ],
+      ),
+    );
+  }
+
+// Onayı geri alma işlemi
+  Future<void> _performUnapprove(Map<String, dynamic> vehicle) async {
+    try {
+      final currentUser = await _authService.getCurrentUser();
+      await _dbService.unapproveVehicle(vehicle['id'].toString(), currentUser?['id']?.toString() ?? '');
+      _showSnackBar('${vehicle['plate']} onayı geri alındı', Colors.orange);
+      _loadVehicles();
+    } catch (e) {
+      _showSnackBar('Onay geri alma hatası: $e', Colors.red);
+    }
+  }
+
 // _approveVehicle metodunu güncelle
   void _approveVehicle(Map<String, dynamic> vehicle) async {
     try {
@@ -159,10 +252,12 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
 
   Widget _buildVehicleDetailPopup(Map<String, dynamic> vehicle) {
     final isApproved = vehicle['is_approved'] == true;
-    final isPending = !isApproved;
+    final isRejected = vehicle['rejection_reason'] != null && vehicle['rejection_reason'].toString().isNotEmpty;
+    final isPending = !isApproved && !isRejected;
     final transportType = vehicle['transport_type'] ?? 'private';
 
-    return Container(
+    return SingleChildScrollView( // Tüm içeriği scrollable yap
+        child: Container(
       padding: EdgeInsets.all(20),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -207,7 +302,11 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
                   _buildDetailRow('Model Yılı', vehicle['model_year']?.toString() ?? 'Belirtilmemiş'),
                   _buildDetailRow('Kapasite', vehicle['capacity']?.toString() ?? 'Belirtilmemiş'),
                   _buildDetailRow('Taşıma Türü', _getTransportTypeText(transportType)),
-                  _buildDetailRow('Durum', isApproved ? 'ONAYLI' : 'ONAY BEKLİYOR'),
+                  _buildDetailRow(
+                      'Durum',
+                      isApproved ? 'ONAYLI' : isRejected ? 'REDDEDİLDİ' : 'ONAY BEKLİYOR',
+                      valueColor: isApproved ? Colors.green : isRejected ? Colors.red : Colors.orange
+                  ),
                 ],
               ),
             ),
@@ -279,27 +378,81 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
 
           SizedBox(height: 20),
 
-          // Aksiyon Butonları
-          Row(
+          // AKSiYON BUTONLARI - Tüm durumlar için
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               if (isPending) ...[
-                Expanded(
+                // BEKLEYEN araçlar için
+                SizedBox(
+                  width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () => _approveVehicle(vehicle),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _approveVehicle(vehicle);
+                    },
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                     child: Text('ONAYLA'),
                   ),
                 ),
-                SizedBox(width: 8),
-                Expanded(
+                SizedBox(
+                  width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: () => _rejectVehicle(vehicle),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _rejectVehicle(vehicle);
+                    },
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                     child: Text('REDDET'),
                   ),
                 ),
               ],
-              Expanded(
+
+              if (isApproved) ...[
+                // ONAYLI araçlar için - GERİ AL butonu
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _unapproveVehicle(vehicle);
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                    child: Text('ONAYI GERİ AL'),
+                  ),
+                ),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _rejectApprovedVehicle(vehicle);
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                    child: Text('REDDET'),
+                  ),
+                ),
+              ],
+
+              if (isRejected) ...[
+                // REDDEDİLMİŞ araçlar için
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _approveVehicle(vehicle);
+                    },
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                    child: Text('ONAYLA'),
+                  ),
+                ),
+              ],
+
+              // KAPAT butonu - her zaman
+              SizedBox(
+                width: double.infinity,
                 child: OutlinedButton(
                   onPressed: () => Navigator.pop(context),
                   child: Text('KAPAT'),
@@ -309,8 +462,13 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
           ),
         ],
       ),
+        ),
     );
+
+
   }
+
+
 
   // Red butonu metodu
   void _rejectVehicle(Map<String, dynamic> vehicle) {
@@ -379,6 +537,8 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
     }
   }
 
+
+
   String _getTransportTypeText(String transportType) {
     switch (transportType) {
       case 'private': return 'Özel Taşıma';
@@ -398,21 +558,31 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
   }
 
 
-  Widget _buildDetailRow(String label, String value) {
+  Widget _buildDetailRow(String label, String value, {Color? valueColor}) {
     return Padding(
       padding: EdgeInsets.symmetric(vertical: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 120, // Container width kullan
+            width: 120,
             child: Text(
               '$label:',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
           SizedBox(width: 8),
-          Expanded(child: Text(value)),
+          Expanded(
+            child: valueColor != null
+                ? Text(
+              value,
+              style: TextStyle(
+                color: valueColor,
+                fontWeight: FontWeight.w600,
+              ),
+            )
+                : Text(value),
+          ),
         ],
       ),
     );
@@ -661,7 +831,7 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       elevation: 2,
       child: ListTile(
-        leading: _buildVehicleLeading(vehicle, isApproved),
+        leading: _buildVehicleLeading(vehicle, isApproved), // Vehicle yerine Map
         title: Text(
           vehicle['plate'] ?? 'Plaka Yok',
           style: TextStyle(fontWeight: FontWeight.bold),
@@ -676,14 +846,14 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
             ),
           ],
         ),
-        trailing: _buildVehicleTrailing(vehicle, isApproved),
-        onTap: () => _showVehicleDetails(vehicle), // TIKLAMA EKLENDİ
+        trailing: _buildVehicleTrailing(vehicle, isApproved), // Vehicle yerine Map
+        onTap: () => _showVehicleDetails(vehicle),
         onLongPress: () => _showActionMenu(vehicle),
       ),
     );
   }
 
-  Widget _buildVehicleLeading(Vehicle vehicle, bool isApproved) {
+  Widget _buildVehicleLeading(Map<String, dynamic> vehicle, bool isApproved) {
     return Container(
       width: 40,
       height: 40,
@@ -699,22 +869,18 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
     );
   }
 
-  Widget _buildVehicleTrailing(Vehicle vehicle, bool isApproved) {
+  Widget _buildVehicleTrailing(Map<String, dynamic> vehicle, bool isApproved) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         if (!isApproved)
           IconButton(
             icon: Icon(Icons.check, color: Colors.green),
-            onPressed: () {
-              // Approve vehicle logic
-            },
+            onPressed: () => _approveVehicle(vehicle),
           ),
         IconButton(
           icon: Icon(Icons.visibility, color: Colors.blue),
-          onPressed: () {
-            // View vehicle details logic
-          },
+          onPressed: () => _showVehicleDetails(vehicle),
         ),
       ],
     );
