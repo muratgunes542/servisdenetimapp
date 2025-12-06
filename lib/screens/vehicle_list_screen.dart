@@ -1,7 +1,9 @@
+//vehicle_list_screen.dart
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '/services/database_service.dart';
 import '/utils/constants.dart';
+import 'vehicle_edit_screen.dart';
 
 class VehicleListScreen extends StatefulWidget {
   @override
@@ -249,114 +251,316 @@ class _VehicleListScreenState extends State<VehicleListScreen> {
 
   Widget _buildVehicleCard(Map<String, dynamic> vehicle) {
     final stats = _getVehicleStats(vehicle);
-    final lastInspection = stats['lastInspection'];
+
+    // DOĞRU VERİLERİ ALALIM - ESKİ VE YENİ SİSTEM UYUMLU
+    final plate = vehicle['plate'] ?? 'Plaka Yok';
+    final model = vehicle['model'] ?? 'Model Belirtilmemiş';
+
+    // SÜRÜCÜ BİLGİSİ - ESKİ VE YENİ SİSTEM UYUMLU
+    final driverName = vehicle['driver_name'] ??
+        vehicle['driver_full_name'] ??
+        'Sürücü Belirtilmemiş';
+
+    // TAŞIMA TÜRÜ
+    final transportType = vehicle['transport_type'] ?? 'private';
+    final transportTypeText = transportType == 'private' ? 'Özel Taşıma' : 'Devlet Taşıması';
+
+    // DURUM RENK VE İKON
+    final statusColor = _getStatusColor(stats['status']);
+    final statusIcon = _getStatusIcon(stats['status']);
+
+    final recentInspections = List<Map<String, dynamic>>.from(vehicle['inspections'] ?? []);
+    final lastInspection = recentInspections.isNotEmpty ? recentInspections.first : null;
+
+    // SON DENETİM OKUL BİLGİSİ - GÜNCELLENMİŞ 👏👏👏
+    final lastInspectionDate = lastInspection?['inspection_date'];
+    final lastSchool = lastInspection?['school_name'] ??
+        lastInspection?['schools']?['name'] ??
+        'Okul Bilinmiyor';
 
     return Card(
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      elevation: 1,
+      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: ListTile(
         leading: Container(
           width: 50,
           height: 50,
           decoration: BoxDecoration(
-            color: Color(0xFFE3F2FD),
-            borderRadius: BorderRadius.circular(8),
+            color: statusColor.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: statusColor.withOpacity(0.3), width: 2),
           ),
           child: Icon(
-            Icons.directions_car,
-            color: Color(0xFF2196F3),
-            size: 30,
+            statusIcon,
+            color: statusColor,
+            size: 24,
           ),
         ),
+
+        // ANA İÇERİK - OKUL BİLGİSİ EKLENDİ 👏👏👏
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // PLAKA - DAHA BELİRGİN
             Text(
-              vehicle['plate'] ?? 'Plaka Yok',
+              plate,
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 16,
+                color: Colors.blue[800],
               ),
             ),
-            if (vehicle['model'] != null)
-              Text(
-                vehicle['model'],
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                ),
-              ),
+            SizedBox(height: 2),
+
+            // OKUL BİLGİSİ - YENİ EKLENDİ 👏👏👏👏
+            if (lastSchool != null && lastSchool != 'Okul Bilinmiyor')
+              Row(
+                children: [
+                  Icon(Icons.school, size: 12, color: Colors.purple[600]),
+                  SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      lastSchool,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.purple[700],
+                        fontWeight: FontWeight.w500,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              )
+            else
+              SizedBox(height: 2),
           ],
         ),
+
+        // ALT BİLGİLER - GÜNCELLENDİ 👏
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(height: 4),
-            if (lastInspection != null) ...[
-              Text(
-                'Son Denetim: ${_formatDate(lastInspection['inspection_date'])}',
-                style: TextStyle(fontSize: 12),
-              ),
-              Text(
-                'Denetçi: ${lastInspection['inspector_name']}',
-                style: TextStyle(fontSize: 12),
-              ),
-            ] else
-              Text(
-                'Henüz denetim yapılmamış',
-                style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
-              ),
-          ],
-        ),
-        trailing: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (lastInspection != null) ...[
-              Text(
-                '${lastInspection['total_score']}/32',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: _getStatusColor(stats['status']),
-                ),
-              ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: _getStatusColor(stats['status']).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  _getStatusText(stats['status']),
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: _getStatusColor(stats['status']),
-                    fontWeight: FontWeight.bold,
+            SizedBox(height: 6),
+
+            // SÜRÜCÜ BİLGİSİ - NET BİR ŞEKİLDE
+            Row(
+              children: [
+                Icon(Icons.person, size: 12, color: Colors.grey[600]),
+                SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    driverName,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-              ),
-            ] else
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.grey[200],
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'Denetim Yok',
+              ],
+            ),
+            SizedBox(height: 2),
+
+            // TAŞIMA TÜRÜ
+            Row(
+              children: [
+                Icon(Icons.category, size: 12, color: Colors.grey[600]),
+                SizedBox(width: 4),
+                Text(
+                  transportTypeText,
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: 11,
                     color: Colors.grey[600],
                   ),
                 ),
+              ],
+            ),
+            SizedBox(height: 4),
+
+            // DENETİM BİLGİSİ - GÜNCELLENDİ 👏👏👏
+            if (lastInspection != null) ...[
+              Text(
+                'Son denetim: ${_formatDate(lastInspectionDate)}',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.green[700],
+                  fontStyle: FontStyle.italic,
+                ),
               ),
+            ] else ...[
+              Row(
+                children: [
+                  Icon(Icons.pending, size: 12, color: Colors.orange[600]),
+                  SizedBox(width: 4),
+                  Text(
+                    'Henüz denetim yapılmamış',
+                    style: TextStyle(fontSize: 11, color: Colors.orange[700], fontStyle: FontStyle.italic),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
+
+        // SAĞ TARAF - BUTONLAR VE DURUM (AYNI KALACAK)
+        trailing: Container(
+          constraints: BoxConstraints(minWidth: 80),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              // DÜZENLE BUTONU
+              IconButton(
+                icon: Icon(Icons.edit, size: 20, color: Colors.blue[700]),
+                onPressed: () {
+                  _editVehicle(vehicle);
+                },
+                tooltip: 'Aracı Düzenle',
+                padding: EdgeInsets.zero,
+                constraints: BoxConstraints(minWidth: 36, minHeight: 36),
+              ),
+
+              // DURUM VE SKOR BİLGİSİ
+              if (lastInspection != null) ...[
+                SizedBox(height: 4),
+                Text(
+                  '${lastInspection['total_score'] ?? 0}/32',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: statusColor,
+                  ),
+                ),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: statusColor.withOpacity(0.3)),
+                  ),
+                  child: Text(
+                    _getStatusText(stats['status']),
+                    style: TextStyle(
+                      fontSize: 9,
+                      color: statusColor,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ] else
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'Denetim Yok',
+                    style: TextStyle(
+                      fontSize: 9,
+                      color: Colors.grey[600],
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+
+        // TIKLANABİLİRLİK
         onTap: () {
-          // TODO: Araç detay sayfası
           _showVehicleDetails(vehicle);
         },
+        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       ),
     );
+  }
+
+// DURUM İKONU İÇİN YARDIMCI METOD
+  IconData _getStatusIcon(String status) {
+    switch (status) {
+      case 'compliant':
+        return Icons.check_circle;
+      case 'conditional':
+        return Icons.warning;
+      case 'non_compliant':
+        return Icons.error;
+      case 'no_inspection':
+      default:
+        return Icons.directions_bus;
+    }
+  }
+
+
+
+// TARİH FORMATLAMA (ZATEN VAR OLAN)
+  String _formatDate(String? dateString) {
+    if (dateString == null || dateString.isEmpty) return 'Belirtilmemiş';
+    try {
+      final date = DateTime.parse(dateString);
+      return '${date.day}/${date.month}/${date.year}';
+    } catch (e) {
+      return dateString;
+    }
+  }
+
+  void _editVehicle(Map<String, dynamic> vehicle) async {
+    // Tüm ilgili verileri yükle
+    try {
+      final vehicleId = vehicle['id'];
+
+      // Paralel olarak tüm verileri yükle
+      final results = await Future.wait([
+        _dbService.getDriverByVehicleId(vehicleId),
+        _dbService.getAttendantByVehicleId(vehicleId),
+        _dbService.getDocumentsByVehicleId(vehicleId),
+      ]);
+
+      final driverData = results[0];
+      final attendantData = results[1];
+      final documentsData = results[2];
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => VehicleEditScreen(
+            vehicle: vehicle,
+            driverData: driverData,
+            attendantData: attendantData,
+            documentsData: documentsData,
+          ),
+        ),
+      ).then((refresh) {
+        if (refresh == true) {
+          _loadVehicles();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Araç bilgileri güncellendi'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      });
+
+    } catch (e) {
+      print('Veri yükleme hatası: $e');
+      // Hata durumunda boş verilerle aç
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => VehicleEditScreen(
+            vehicle: vehicle,
+            driverData: null,
+            attendantData: null,
+            documentsData: null,
+          ),
+        ),
+      );
+    }
   }
 
   void _showVehicleDetails(Map<String, dynamic> vehicle) {
@@ -477,12 +681,6 @@ class _VehicleListScreenState extends State<VehicleListScreen> {
     );
   }
 
-  String _formatDate(String dateString) {
-    try {
-      final date = DateTime.parse(dateString);
-      return '${date.day}/${date.month}/${date.year}';
-    } catch (e) {
-      return dateString;
-    }
-  }
+
+
 }

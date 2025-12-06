@@ -37,7 +37,10 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
   Future<void> _loadVehicles() async {
     try {
       final vehicles = await _dbService.getAllVehicles();
-      //final vehicles = await _hybridService.getVehicles(); // YENİ
+
+      // MOUNTED KONTROLÜ EKLE
+      if (!mounted) return;
+
       setState(() {
         _vehicles = vehicles;
         _filteredVehicles = vehicles;
@@ -46,9 +49,14 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
       });
     } catch (e) {
       print('Araç yükleme hatası: $e');
+
+      // MOUNTED KONTROLÜ EKLE
+      if (!mounted) return;
+
       setState(() => _isLoading = false);
     }
   }
+
 
   void _searchVehicles(String query) {
     setState(() {
@@ -184,20 +192,47 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
       final currentUser = await _authService.getCurrentUser();
       await _dbService.unapproveVehicle(vehicle['id'].toString(), currentUser?['id']?.toString() ?? '');
       _showSnackBar('${vehicle['plate']} onayı geri alındı', Colors.orange);
-      _loadVehicles();
+
+      // MOUNTED KONTROLÜ
+      if (mounted) {
+        await _loadVehicles();
+      }
     } catch (e) {
       _showSnackBar('Onay geri alma hatası: $e', Colors.red);
     }
   }
 
-// _approveVehicle metodunu güncelle
+  Future<void> _performRejection(Map<String, dynamic> vehicle, String reason) async {
+    try {
+      final currentUser = await _authService.getCurrentUser();
+      await _dbService.rejectVehicle(
+        vehicle['id'].toString(),
+        currentUser?['id']?.toString() ?? '',
+        reason,
+      );
+
+      _showSnackBar('${vehicle['plate']} başvurusu reddedildi', Colors.orange);
+
+      // MOUNTED KONTROLÜ
+      if (mounted) {
+        await _loadVehicles();
+      }
+
+    } catch (e) {
+      _showSnackBar('Reddetme hatası: $e', Colors.red);
+    }
+  }
+
   void _approveVehicle(Map<String, dynamic> vehicle) async {
     try {
       final currentUser = await _authService.getCurrentUser();
-      // vehicle['id'] integer geliyor, string'e çevir
       await _dbService.approveVehicle(vehicle['id'].toString(), currentUser?['id']?.toString() ?? '');
       _showSnackBar('${vehicle['plate']} onaylandı', Colors.green);
-      _loadVehicles();
+
+      // MOUNTED KONTROLÜ
+      if (mounted) {
+        await _loadVehicles();
+      }
     } catch (e) {
       _showSnackBar('Onay hatası: $e', Colors.red);
     }
@@ -520,22 +555,7 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
     );
   }
 
-  Future<void> _performRejection(Map<String, dynamic> vehicle, String reason) async {
-    try {
-      final currentUser = await _authService.getCurrentUser();
-      await _dbService.rejectVehicle(
-        vehicle['id'].toString(),
-        currentUser?['id']?.toString() ?? '',
-        reason,
-      );
 
-      _showSnackBar('${vehicle['plate']} başvurusu reddedildi', Colors.orange);
-      _loadVehicles();
-      Navigator.pop(context); // Popup'ı kapat
-    } catch (e) {
-      _showSnackBar('Reddetme hatası: $e', Colors.red);
-    }
-  }
 
 
 
@@ -690,15 +710,7 @@ class _IlceVehiclesScreenState extends State<IlceVehiclesScreen> {
               label: Text('YENİ ARAÇ EKLE'),
             ),
           ),
-          SizedBox(width: 12),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: _showApprovalScreen,
-              icon: Icon(Icons.approval),
-              label: Text('ONAY BEKLEYEN ($_pendingCount)'),
-            ),
-          ),
-        ],
+          ],
       ),
     );
   }

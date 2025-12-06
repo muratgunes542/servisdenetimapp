@@ -1,373 +1,625 @@
-// screens/vehicle_edit_screen.dart
+//vehicle_edit_screen.dart
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '/services/database_service.dart';
 import '/utils/constants.dart';
+import '/screens/driver_edit_screen.dart';
+import '/screens/attendant_edit_screen.dart';
+import '/screens/documents_edit_screen.dart';
 
 class VehicleEditScreen extends StatefulWidget {
   final Map<String, dynamic> vehicle;
+  final Map<String, dynamic>? driverData;
+  final Map<String, dynamic>? attendantData;
+  final Map<String, dynamic>? documentsData;
 
-  const VehicleEditScreen({Key? key, required this.vehicle}) : super(key: key);
+  const VehicleEditScreen({
+    Key? key,
+    required this.vehicle,
+    this.driverData,
+    this.attendantData,
+    this.documentsData,
+  }) : super(key: key);
+
 
   @override
-  State<VehicleEditScreen> createState() => _VehicleEditScreenState();
+  _VehicleEditScreenState createState() => _VehicleEditScreenState();
 }
 
 class _VehicleEditScreenState extends State<VehicleEditScreen> {
+  final _formKey = GlobalKey<FormState>();
   final DatabaseService _dbService = DatabaseService();
+  final SupabaseClient _supabase = Supabase.instance.client; // EKLE
 
-  // Form controllers
+  // Sadece araç bilgileri için controller'lar
   final TextEditingController _plateController = TextEditingController();
   final TextEditingController _modelController = TextEditingController();
   final TextEditingController _modelYearController = TextEditingController();
   final TextEditingController _capacityController = TextEditingController();
-  final TextEditingController _driverNameController = TextEditingController();
-  final TextEditingController _driverPhoneController = TextEditingController();
 
-  // Rehber personel controllers
-  final TextEditingController _guideNameController = TextEditingController();
-  final TextEditingController _guideAgeController = TextEditingController();
-
-
-
-  // Taşıma türü ve tarihler
-  String _transportType = 'private'; // 'private' veya 'state'
-  DateTime? _driverLicenseExpiry;
-  DateTime? _srcCertificateExpiry;
-  DateTime? _insuranceExpiry;
-  DateTime? _inspectionExpiry;
-  DateTime? _routePermitExpiry;
-  DateTime? _gCertificateExpiry;
-
-  // Rehber personel durumu
-  bool _hasReflectiveVest = false;
-  bool _hasWarningLights = false;
-
-  String? _guidePhotoUrl;
-
+  String? _selectedTransportType;
+  DateTime? _selectedLastMaintenanceDate;
   bool _isSubmitting = false;
-  String? _driverPhotoUrl;
-  List<String> _selectedSchoolIds = [];
-  List<Map<String, dynamic>> _schools = [];
-
 
   @override
   void initState() {
     super.initState();
     _initializeForm();
-    _loadSchools(); // BU SATIRI EKLE
+    _loadVehicleCompleteData(); // YENİ METOD
+  }
+
+// Tam araç verisini yükle
+  Future<void> _loadVehicleCompleteData() async {
+    try {
+      final completeData = await _dbService.getVehicleCompleteData(widget.vehicle['id']);
+
+      setState(() {
+        // Burada state değişkenlerinizi güncelleyin
+        // Örneğin: _driverData, _attendantData, _documentsData
+      });
+
+    } catch (e) {
+      print('Tam araç verisi yükleme hatası: $e');
+    }
+  }
+
+// Sürücü düzenleme ekranına geçiş
+  void _openDriverEdit() async {
+    try {
+      // Önce güncel verileri yükle
+      final driverData = await _dbService.getDriverByVehicleId(widget.vehicle['id']);
+
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => DriverEditScreen(
+            vehicle: widget.vehicle,
+            driverData: driverData ?? {}, // Null kontrolü
+          ),
+        ),
+      );
+
+      if (result == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sürücü bilgileri güncellendi'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        // Verileri yeniden yükle
+        _loadVehicleCompleteData();
+      }
+    } catch (e) {
+      print('Sürücü düzenleme hatası: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Sürücü bilgileri yüklenirken hata oluştu'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+// İlgili verileri yükle
+  Future<void> _loadRelatedData() async {
+    try {
+      final completeData = await _dbService.getVehicleCompleteData(widget.vehicle['id']);
+
+      setState(() {
+        // Burada driverData, attendantData, documentsData state değişkenleri olmalı
+        // Veya doğrudan ilgili edit screen'lere geçmeli
+      });
+
+    } catch (e) {
+      print('İlgili veriler yüklenirken hata: $e');
+    }
   }
 
 
-  // Okulları yükle
-  Future<void> _loadSchools() async {
+// Rehber düzenleme ekranına geçiş - DÜZELTTİ
+  // vehicle_edit_screen.dart - Doğrudan veri yükleme
+
+  void _openAttendantEdit() async {
     try {
-      final schools = await _dbService.getSchools();
-      setState(() {
-        _schools = schools;
-      });
+      print('🔄 Rehber verisi doğrudan yükleniyor: ${widget.vehicle['id']}');
+
+      // DOĞRUDAN VEHICLES TABLOSUNDAN AL
+      final directData = await _supabase
+          .from('vehicles')
+          .select('attendant_name, attendant_birth_date, has_reflective_vest, has_warning_lights')
+          .eq('id', widget.vehicle['id'])
+          .single();
+
+      // MANUEL MAPPING
+      final attendantData = {
+        'full_name': directData['attendant_name'],
+        'birth_date': directData['attendant_birth_date'],
+        'has_reflective_vest': directData['has_reflective_vest'] ?? false,
+        'has_warning_lights': directData['has_warning_lights'] ?? false,
+      };
+
+      print('🔍 DOĞRUDAN REHBER VERİSİ: $attendantData');
+
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => AttendantEditScreen(
+            vehicle: widget.vehicle,
+            attendantData: attendantData,
+          ),
+        ),
+      );
+
+      if (result == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Rehber bilgileri güncellendi'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
     } catch (e) {
-      print('Okul yükleme hatası: $e');
+      print('❌ Rehber düzenleme hatası: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Rehber bilgileri yüklenirken hata oluştu: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+  void _openDocumentsEdit() async {
+    final documentsData = await _dbService.getDocumentsByVehicleId(widget.vehicle['id']);
+
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DocumentsEditScreen(
+          vehicle: widget.vehicle,
+          documentsData: documentsData,
+        ),
+      ),
+    );
+
+    if (result == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Belge bilgileri güncellendi'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  void _validateInitialValues() {
+    // Taşıma türü geçerli değilse varsayılan değer ata
+    if (_selectedTransportType != 'private' && _selectedTransportType != 'public') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        setState(() {
+          _selectedTransportType = 'private'; // Varsayılan değer
+        });
+      });
     }
   }
 
   void _initializeForm() {
     final vehicle = widget.vehicle;
 
-    // Temel bilgiler
     _plateController.text = vehicle['plate'] ?? '';
     _modelController.text = vehicle['model'] ?? '';
+    _modelYearController.text = vehicle['model_year']?.toString() ?? '';
     _capacityController.text = vehicle['capacity']?.toString() ?? '';
-    _driverNameController.text = vehicle['driver_name'] ?? '';
-    _driverPhoneController.text = vehicle['driver_phone'] ?? '';
-    _driverPhotoUrl = vehicle['driver_photo_url']; // BU SATIRI EKLE
+    _selectedTransportType = vehicle['transport_type'] ?? 'private';
 
-    // Taşıma türü
-    _transportType = vehicle['transport_type'] ?? 'private';
-
-    // Tarihler
-    if (vehicle['driver_license_expiry'] != null) {
-      _driverLicenseExpiry = DateTime.parse(vehicle['driver_license_expiry']);
-    }
-    if (vehicle['src_certificate_expiry'] != null) {
-      _srcCertificateExpiry = DateTime.parse(vehicle['src_certificate_expiry']);
-    }
-    if (vehicle['insurance_expiry'] != null) {
-      _insuranceExpiry = DateTime.parse(vehicle['insurance_expiry']);
-    }
-    if (vehicle['inspection_expiry'] != null) {
-      _inspectionExpiry = DateTime.parse(vehicle['inspection_expiry']);
-    }
-    if (vehicle['route_permit_expiry'] != null) {
-      _routePermitExpiry = DateTime.parse(vehicle['route_permit_expiry']);
-    }
-    if (vehicle['g_certificate_expiry'] != null) {
-      _gCertificateExpiry = DateTime.parse(vehicle['g_certificate_expiry']);
-    }
-
-    // Mevcut okulları yükle
-    _loadVehicleSchools(); // BU SATIRI EKLE
-  }
-
-  // Aracın bağlı olduğu okulları yükle
-  Future<void> _loadVehicleSchools() async {
-    try {
-      final vehicleSchools = await _dbService.getVehicleSchools(widget.vehicle['id']);
-      setState(() {
-        _selectedSchoolIds = vehicleSchools
-            .map((vs) => vs['schools']['id'].toString())
-            .toList();
-      });
-    } catch (e) {
-      print('Araç okulları yükleme hatası: $e');
+    // Bakım tarihi
+    if (vehicle['last_maintenance_date'] != null) {
+      try {
+        _selectedLastMaintenanceDate = DateTime.parse(vehicle['last_maintenance_date']);
+      } catch (e) {
+        print('Bakım tarihi parse hatası: $e');
+      }
     }
   }
 
-  // Okul seçim bölümünü ekle
-  // vehicle_edit_screen.dart - Okul seçim bölümünü güncelle
-  Widget _buildSchoolsSection() {
-    return _buildSection(
-      'Taşıma Yapılacak Okullar *',
-      Icons.school,
-      [
+  Widget _buildModelYearField() {
+    return TextFormField(
+      controller: _modelYearController,
+      keyboardType: TextInputType.number,
+      decoration: InputDecoration(
+        labelText: 'Model Yılı *',
+        border: OutlineInputBorder(),
+        hintText: '2023',
+        prefixIcon: Icon(Icons.calendar_today),
+      ),
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Model yılı zorunludur';
+        }
+        final year = int.tryParse(value);
+        if (year == null || year < 1990 || year > DateTime.now().year + 1) {
+          return 'Geçerli bir model yılı girin (1990-${DateTime.now().year + 1})';
+        }
+        return null;
+      },
+    );
+  }
+
+  Widget _buildMaintenanceDateField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         Text(
-          'Bu aracın taşıma yapacağı okulları seçin (Çoklu seçim yapabilirsiniz):',
-          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+          'Son Bakım Tarihi',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
         ),
-        SizedBox(height: 12),
-
-        // Açılır Kutu - Tümünü Seç/Hepsini Kaldır
-        Card(
-          elevation: 1,
-          child: ListTile(
-            leading: Icon(Icons.select_all, color: Color(0xFF2196F3)),
-            title: Text('Toplu İşlem'),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
+        SizedBox(height: 8),
+        InkWell(
+          onTap: _selectMaintenanceDate,
+          child: Container(
+            width: double.infinity,
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
               children: [
-                ElevatedButton(
-                  onPressed: _selectAllSchools,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                Icon(Icons.calendar_today, color: Colors.grey[600]),
+                SizedBox(width: 12),
+                Text(
+                  _selectedLastMaintenanceDate != null
+                      ? '${_selectedLastMaintenanceDate!.day}/${_selectedLastMaintenanceDate!.month}/${_selectedLastMaintenanceDate!.year}'
+                      : 'Tarih seçin...',
+                  style: TextStyle(
+                    color: _selectedLastMaintenanceDate != null ? Colors.black : Colors.grey,
                   ),
-                  child: Text('Tümünü Seç', style: TextStyle(fontSize: 12)),
                 ),
-                SizedBox(width: 8),
-                OutlinedButton(
-                  onPressed: _deselectAllSchools,
-                  style: OutlinedButton.styleFrom(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                Spacer(),
+                if (_selectedLastMaintenanceDate != null)
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'Kayıtlı',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.blue,
+                      ),
+                    ),
                   ),
-                  child: Text('Hepsini Kaldır', style: TextStyle(fontSize: 12)),
-                ),
               ],
             ),
           ),
-        ),
-
-        SizedBox(height: 12),
-
-        // Seçilen Okul Sayısı
-        Container(
-          padding: EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.blue[50],
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.info, color: Colors.blue, size: 16),
-              SizedBox(width: 8),
-              Text(
-                '${_selectedSchoolIds.length} okul seçildi',
-                style: TextStyle(color: Colors.blue[700], fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-        ),
-
-        SizedBox(height: 12),
-
-        // Okul Listesi - Açılır Kutu
-        ExpansionTile(
-          title: Text(
-            'Okul Listesi (${_schools.length} okul)',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          subtitle: Text(_selectedSchoolIds.isEmpty ? 'Hiç okul seçilmedi' : '${_selectedSchoolIds.length} okul seçildi'),
-          leading: Icon(Icons.list, color: Color(0xFF2196F3)),
-          initiallyExpanded: true,
-          children: [
-            if (_schools.isEmpty)
-              Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('Yükleniyor...', style: TextStyle(color: Colors.grey)),
-              )
-            else
-              Column(
-                children: _schools.map((school) => _buildSchoolCheckbox(school)).toList(),
-              ),
-          ],
-        ),
-
-        // Hızlı Filtre Butonları
-        SizedBox(height: 12),
-        Text('Hızlı Filtre:', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-        SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _buildQuickFilterChip('Üsküdar', 'Üsküdar'),
-            _buildQuickFilterChip('Kadıköy', 'Kadıköy'),
-            _buildQuickFilterChip('Beşiktaş', 'Beşiktaş'),
-            _buildQuickFilterChip('Ataşehir', 'Ataşehir'),
-          ],
         ),
       ],
     );
   }
 
-// Gelişmiş Okul Checkbox
-  Widget _buildSchoolCheckbox(Map<String, dynamic> school) {
-    final isSelected = _selectedSchoolIds.contains(school['id'].toString());
-    final district = school['district'] ?? '';
+  Future<void> _selectMaintenanceDate() async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedLastMaintenanceDate ?? DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null && picked != _selectedLastMaintenanceDate) {
+      setState(() {
+        _selectedLastMaintenanceDate = picked;
+      });
+    }
+  }
 
+  Future<void> _saveVehicle() async {
+    if (_formKey.currentState!.validate()) {
+      setState(() {
+        _isSubmitting = true;
+      });
+
+      try {
+        final vehicleData = {
+          'plate': _plateController.text.trim().toUpperCase(),
+          'model': _modelController.text.trim(),
+          'model_year': int.parse(_modelYearController.text),
+          'capacity': int.parse(_capacityController.text),
+          'transport_type': _selectedTransportType ?? 'private',
+          'last_maintenance_date': _selectedLastMaintenanceDate?.toIso8601String(),
+        };
+
+        await _dbService.updateVehicle(widget.vehicle['id'], vehicleData);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Araç başarıyla güncellendi'),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        Navigator.pop(context, true);
+      } catch (e) {
+        print('Araç kaydetme hatası: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Araç kaydedilirken hata oluştu: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      } finally {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
+    }
+  }
+
+
+
+  Widget _buildManagementCard(String title, String subtitle, IconData icon, Color color, VoidCallback onTap) {
     return Card(
-      margin: EdgeInsets.only(bottom: 8),
-      elevation: isSelected ? 2 : 1,
-      color: isSelected ? Colors.blue[50] : Colors.white,
-      child: CheckboxListTile(
-        value: isSelected,
-        onChanged: (selected) {
-          setState(() {
-            if (selected == true) {
-              _selectedSchoolIds.add(school['id'].toString());
-            } else {
-              _selectedSchoolIds.remove(school['id'].toString());
-            }
-          });
-        },
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              school['name'],
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: isSelected ? Color(0xFF2196F3) : Colors.black,
-              ),
-            ),
-            SizedBox(height: 2),
-            Text(
-              district,
-              style: TextStyle(
-                fontSize: 12,
-                color: isSelected ? Colors.blue[600] : Colors.grey[600],
-              ),
-            ),
-          ],
+      elevation: 2,
+      child: ListTile(
+        leading: Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: color),
         ),
-        secondary: Icon(
-          Icons.school,
-          color: isSelected ? Color(0xFF2196F3) : Colors.grey,
+        title: Text(
+          title,
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        controlAffinity: ListTileControlAffinity.leading,
+        subtitle: Text(subtitle),
+        trailing: Icon(Icons.arrow_forward_ios, size: 16),
+        onTap: onTap,
       ),
     );
   }
-
-// Hızlı Filtre Chip
-  Widget _buildQuickFilterChip(String label, String district) {
-    final schoolsInDistrict = _schools.where((s) => s['district'] == district).toList();
-    final selectedInDistrict = _selectedSchoolIds.where((id) {
-      final school = _schools.firstWhere((s) => s['id'].toString() == id, orElse: () => {});
-      return school['district'] == district;
-    }).length;
-
-    return FilterChip(
-      label: Text('$label ($selectedInDistrict/${schoolsInDistrict.length})'),
-      selected: selectedInDistrict > 0,
-      onSelected: (selected) {
-        if (selected) {
-          // Bu ilçedeki tüm okulları seç
-          setState(() {
-            for (final school in schoolsInDistrict) {
-              final schoolId = school['id'].toString();
-              if (!_selectedSchoolIds.contains(schoolId)) {
-                _selectedSchoolIds.add(schoolId);
-              }
-            }
-          });
-        } else {
-          // Bu ilçedeki tüm okulları kaldır
-          setState(() {
-            for (final school in schoolsInDistrict) {
-              final schoolId = school['id'].toString();
-              _selectedSchoolIds.remove(schoolId);
-            }
-          });
-        }
-      },
-      selectedColor: Color(0xFF2196F3),
-      checkmarkColor: Colors.white,
-    );
-  }
-
-// Toplu işlem metodları
-  void _selectAllSchools() {
-    setState(() {
-      _selectedSchoolIds = _schools.map((school) => school['id'].toString()).toList();
-    });
-    _showSnackBar('Tüm okullar seçildi');
-  }
-
-  void _deselectAllSchools() {
-    setState(() {
-      _selectedSchoolIds.clear();
-    });
-    _showSnackBar('Tüm okullar kaldırıldı');
-  }
-  // Forma okul bölümünü ekle
-  Widget _buildForm() {
-    return SingleChildScrollView(
-      padding: EdgeInsets.all(16),
-      child: Column(
-        children: [
-          _buildTransportTypeSection(),
-          SizedBox(height: 20),
-          _buildVehicleSection(),
-          SizedBox(height: 20),
-          _buildDriverSection(),
-          SizedBox(height: 20),
-          if (_transportType == 'private') _buildGuideSection(),
-          SizedBox(height: 20),
-          _buildSchoolsSection(), // BU SATIRI EKLE
-          SizedBox(height: 20),
-          _buildDocumentsSection(),
-          SizedBox(height: 20),
-          _buildSubmitButton(),
-        ],
-      ),
-    );
-  }
-
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: Text('Araç Düzenle'),
-        backgroundColor: Color(0xFFE3F2FD),
+        title: Text('Araç Yönetimi'),
+        backgroundColor: Color(0xFF2196F3),
         actions: [
-          IconButton(
-            icon: Icon(Icons.save),
-            onPressed: _isSubmitting ? null : _submitForm,
-          ),
+          if (_isSubmitting)
+            Padding(
+              padding: EdgeInsets.only(right: 16),
+              child: Center(child: CircularProgressIndicator(color: Colors.white)),
+            )
+          else
+            IconButton(
+              icon: Icon(Icons.save),
+              onPressed: _saveVehicle,
+              tooltip: 'Araç Bilgilerini Kaydet',
+            ),
         ],
       ),
-      body: _isSubmitting ? _buildLoading() : _buildForm(),
+      body: _isSubmitting
+          ? _buildLoading()
+          : SingleChildScrollView(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          children: [
+            // Araç Bilgileri Kartı
+            Card(
+              elevation: 3,
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.directions_bus, color: Color(0xFF2196F3)),
+                        SizedBox(width: 8),
+                        Text(
+                          'Araç Bilgileri',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF2196F3),
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 16),
+                    Form(
+                      key: _formKey,
+                      child: Column(
+                        children: [
+                          // Plaka
+                          TextFormField(
+                            controller: _plateController,
+                            decoration: InputDecoration(
+                              labelText: 'Plaka *',
+                              border: OutlineInputBorder(),
+                              hintText: '34 ABC 123',
+                              prefixIcon: Icon(Icons.confirmation_number),
+                            ),
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return 'Plaka zorunludur';
+                              }
+                              if (value.length < 5) {
+                                return 'Geçerli bir plaka girin';
+                              }
+                              return null;
+                            },
+                          ),
+                          SizedBox(height: 16),
+
+                          // Model
+                          TextFormField(
+                            controller: _modelController,
+                            decoration: InputDecoration(
+                              labelText: 'Araç Modeli *',
+                              border: OutlineInputBorder(),
+                              hintText: 'Mercedes Sprinter',
+                              prefixIcon: Icon(Icons.directions_bus),
+                            ),
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return 'Model zorunludur';
+                              }
+                              return null;
+                            },
+                          ),
+                          SizedBox(height: 16),
+
+                          // Model Yılı
+                          _buildModelYearField(),
+                          SizedBox(height: 16),
+
+                          // Kapasite
+                          TextFormField(
+                            controller: _capacityController,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: 'Öğrenci Kapasitesi *',
+                              border: OutlineInputBorder(),
+                              hintText: '20',
+                              prefixIcon: Icon(Icons.people),
+                            ),
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return 'Kapasite zorunludur';
+                              }
+                              final capacity = int.tryParse(value);
+                              if (capacity == null || capacity <= 0) {
+                                return 'Geçerli bir kapasite girin';
+                              }
+                              return null;
+                            },
+                          ),
+                          SizedBox(height: 16),
+
+                          // Taşıma Türü
+                          DropdownButtonFormField<String>(
+                            value: _selectedTransportType,
+                            decoration: InputDecoration(
+                              labelText: 'Taşıma Türü *',
+                              border: OutlineInputBorder(),
+                              prefixIcon: Icon(Icons.transfer_within_a_station),
+                            ),
+                            items: [
+                              DropdownMenuItem<String>(
+                                value: 'private', // BU DEĞER _selectedTransportType ile AYNI OLMALI
+                                child: Text('Özel Taşıma'),
+                              ),
+                              DropdownMenuItem<String>(
+                                value: 'public', // BU DEĞER _selectedTransportType ile AYNI OLMALI
+                                child: Text('Devlet Taşıması'),
+                              ),
+                            ],
+                            onChanged: (String? newValue) { // String? tipini belirtin
+                              setState(() {
+                                _selectedTransportType = newValue;
+                              });
+                            },
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return 'Taşıma türü seçin';
+                              }
+                              return null;
+                            },
+                          ),
+                          SizedBox(height: 16),
+
+                          // Bakım Tarihi
+                          _buildMaintenanceDateField(),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            SizedBox(height: 20),
+
+            // Yönetim Kartları
+            Text(
+              'Diğer Bilgiler',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 12),
+            Text(
+              'Aşağıdaki bölümlerden ilgili bilgileri düzenleyebilirsiniz',
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+            SizedBox(height: 16),
+
+            // Sürücü Bilgileri Kartı
+            _buildManagementCard(
+              'Sürücü Bilgileri',
+              'Ehliyet, SRC belgesi, kişisel bilgiler',
+              Icons.person,
+              Color(0xFF2196F3),
+              _openDriverEdit,
+            ),
+            SizedBox(height: 12),
+
+            // Rehber Bilgileri Kartı
+            if (_selectedTransportType == 'private')
+              _buildManagementCard(
+                'Rehber Personel Bilgileri',
+                'Rehber personel bilgileri ve ekipmanlar',
+                Icons.accessible,
+                Color(0xFF4CAF50),
+                _openAttendantEdit,
+              ),
+            if (_selectedTransportType == 'private') SizedBox(height: 12),
+
+            // Belge Bilgileri Kartı
+            _buildManagementCard(
+              'Araç Belgeleri',
+              'Sigorta, muayene, yangın tüpü ve diğer belgeler',
+              Icons.description,
+              Color(0xFFFF9800),
+              _openDocumentsEdit,
+            ),
+
+            SizedBox(height: 24),
+
+            // Ana Kaydet Butonu
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: _saveVehicle,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Color(0xFF2196F3),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: _isSubmitting
+                    ? SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+                    : Text(
+                  'ARAÇ BİLGİLERİNİ KAYDET',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -380,499 +632,6 @@ class _VehicleEditScreenState extends State<VehicleEditScreen> {
           SizedBox(height: 16),
           Text('Kaydediliyor...'),
         ],
-      ),
-    );
-  }
-
-
-
-  Widget _buildTransportTypeSection() {
-    return Card(
-      elevation: 2,
-      child: Padding(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Taşıma Türü *',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildTransportTypeRadio(
-                    'Özel Taşıma',
-                    'private',
-                    Icons.people,
-                    'Okul servisi, özel taşımacılık',
-                  ),
-                ),
-                SizedBox(width: 16),
-                Expanded(
-                  child: _buildTransportTypeRadio(
-                    'Devlet Taşıması',
-                    'state',
-                    Icons.account_balance,
-                    'Resmi kurum taşımacılığı',
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: 8),
-            Text(
-              _transportType == 'private'
-                  ? '• Rehber personel zorunlu\n• Araç yaş sınırı var (15 yıl)'
-                  : '• Rehber personel gerekmez\n• Araç yaş sınırı yok',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTransportTypeRadio(String title, String value, IconData icon, String description) {
-    return InkWell(
-      onTap: () => setState(() => _transportType = value),
-      child: Container(
-        padding: EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: _transportType == value ? Color(0xFF2196F3) : Colors.grey[300]!,
-            width: _transportType == value ? 2 : 1,
-          ),
-          borderRadius: BorderRadius.circular(8),
-          color: _transportType == value ? Color(0xFFE3F2FD) : Colors.white,
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: _transportType == value ? Color(0xFF2196F3) : Colors.grey),
-            SizedBox(height: 8),
-            Text(
-              title,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: _transportType == value ? Color(0xFF2196F3) : Colors.black,
-              ),
-            ),
-            SizedBox(height: 4),
-            Text(
-              description,
-              style: TextStyle(fontSize: 10, color: Colors.grey[600]),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildVehicleSection() {
-    return _buildSection(
-      'Araç Bilgileri',
-      Icons.directions_bus,
-      [
-        _buildTextField('Plaka *', _plateController),
-        SizedBox(height: 12),
-        _buildTextField('Model *', _modelController),
-        SizedBox(height: 12),
-        _buildTextField('Model Yılı *', _modelYearController,
-            hint: '2023',
-            keyboardType: TextInputType.number
-        ),
-        SizedBox(height: 12),
-        _buildTextField('Kapasite *', _capacityController, keyboardType: TextInputType.number),
-      ],
-    );
-  }
-
-
-
-  Widget _buildDriverSection() {
-    return _buildSection(
-      'Sürücü Bilgileri',
-      Icons.person,
-      [
-        _buildTextField('Sürücü Adı Soyadı *', _driverNameController),
-        SizedBox(height: 12),
-        _buildTextField('Sürücü Telefonu', _driverPhoneController),
-        SizedBox(height: 12),
-        _buildPhotoField('Sürücü Fotoğrafı', _driverPhotoUrl, _pickDriverPhoto), // BU SATIRI EKLE
-        SizedBox(height: 12),
-        _buildDateFieldWithLabel(
-            'Ehliyet Geçerlilik Tarihi *',
-            _driverLicenseExpiry,
-                (date) => setState(() => _driverLicenseExpiry = date)
-        ),
-        SizedBox(height: 12),
-        _buildDateFieldWithLabel(
-            'SRC Belge Geçerlilik Tarihi *',
-            _srcCertificateExpiry,
-                (date) => setState(() => _srcCertificateExpiry = date)
-        ),
-      ],
-    );
-  }
-
-  Future<void> _pickDriverPhoto() async {
-    _showSnackBar('Şoför fotoğrafı yükleme yakında eklenecek');
-  }
-
-
-  Widget _buildGuideSection() {
-    return _buildSection(
-      'Rehber Personel Bilgileri *',
-      Icons.accessible,
-      [
-        _buildTextField('Rehber Adı Soyadı *', _guideNameController),
-        SizedBox(height: 12),
-        _buildTextField('Rehber Yaşı *', _guideAgeController, keyboardType: TextInputType.number),
-        SizedBox(height: 12),
-        _buildPhotoField('Rehber Fotoğrafı', _guidePhotoUrl, _pickGuidePhoto),
-        SizedBox(height: 12),
-
-      ],
-    );
-  }
-
-  Widget _buildDocumentsSection() {
-    return _buildSection(
-      'Evrak Geçerlilik Tarihleri',
-      Icons.description,
-      [
-        _buildDateFieldWithLabel(
-            'Sigorta Bitiş Tarihi *',
-            _insuranceExpiry,
-                (date) => setState(() => _insuranceExpiry = date)
-        ),
-        SizedBox(height: 12),
-        _buildDateFieldWithLabel(
-            'Muayene Bitiş Tarihi *',
-            _inspectionExpiry,
-                (date) => setState(() => _inspectionExpiry = date)
-        ),
-        SizedBox(height: 12),
-        _buildDateFieldWithLabel(
-            'Güzergah İzin Belgesi Bitiş',
-            _routePermitExpiry,
-                (date) => setState(() => _routePermitExpiry = date)
-        ),
-        SizedBox(height: 12),
-        _buildDateFieldWithLabel(
-            'G Belgesi Bitiş Tarihi',
-            _gCertificateExpiry,
-                (date) => setState(() => _gCertificateExpiry = date)
-        ),
-      ],
-    );
-  }
-
-  // Diğer widget metodları (buildSection, buildTextField, buildDateFieldWithLabel, buildPhotoField)
-  Widget _buildSection(String title, IconData icon, List<Widget> children) {
-    return Card(
-      elevation: 2,
-      child: Padding(
-        padding: EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: Color(0xFF2196F3)),
-                SizedBox(width: 8),
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey[800],
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: 16),
-            ...children,
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTextField(String label, TextEditingController controller,
-      {String? hint, TextInputType keyboardType = TextInputType.text}) {
-    return TextField(
-      controller: controller,
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hint,
-        border: OutlineInputBorder(),
-        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      ),
-      keyboardType: keyboardType,
-    );
-  }
-
-  // ALTERNATİF: Daha güzel date field
-  Widget _buildDateFieldWithLabel(String label, DateTime? selectedDate, ValueChanged<DateTime> onDateSelected) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-            color: Colors.grey[700],
-          ),
-        ),
-        SizedBox(height: 6),
-        Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey[400]!),
-            borderRadius: BorderRadius.circular(8),
-            color: Colors.white,
-          ),
-          child: ListTile(
-            leading: Icon(Icons.calendar_today, color: Color(0xFF2196F3)),
-            title: Text(
-              selectedDate != null
-                  ? '${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'
-                  : 'Tarih seçin...',
-              style: TextStyle(
-                color: selectedDate != null ? Colors.black : Colors.grey[500],
-              ),
-            ),
-            trailing: selectedDate != null ? _buildDateStatus(selectedDate) : null,
-            onTap: () => _selectDate(context, selectedDate, onDateSelected),
-            contentPadding: EdgeInsets.symmetric(horizontal: 12),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDateStatus(DateTime date) {
-    final now = DateTime.now();
-    final difference = date.difference(now).inDays;
-    Color color;
-    String text;
-
-    if (date.isBefore(now)) {
-      color = Colors.red;
-      text = 'SÜRESİ DOLMUŞ';
-    } else if (difference <= 30) {
-      color = Colors.orange;
-      text = '$difference gün';
-    } else if (difference <= 90) {
-      color = Colors.yellow[700]!;
-      text = '$difference gün';
-    } else {
-      color = Colors.green;
-      text = '$difference gün';
-    }
-
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.bold,
-          color: color,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPhotoField(String label, String? photoUrl, VoidCallback onTap) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-        ),
-        SizedBox(height: 8),
-        InkWell(
-          onTap: onTap,
-          child: Container(
-            width: double.infinity,
-            height: 120,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey),
-              borderRadius: BorderRadius.circular(8),
-              color: Colors.grey[50],
-            ),
-            child: photoUrl != null
-                ? ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.network(photoUrl, fit: BoxFit.cover),
-            )
-                : Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.camera_alt, size: 40, color: Colors.grey[400]),
-                SizedBox(height: 8),
-                Text('Fotoğraf Seç', style: TextStyle(color: Colors.grey[600])),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-  // Bunlar SchoolVehicleFormScreen'deki gibi olacak, kopyala-yapıştır yapabilirsin
-
-  Widget _buildSubmitButton() {
-    final isValid = _validateForm();
-
-    return SizedBox(
-      width: double.infinity,
-      height: 55,
-      child: ElevatedButton(
-        onPressed: isValid ? _submitForm : null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: isValid ? Colors.green : Colors.grey[400],
-        ),
-        child: Text(
-          'DEĞİŞİKLİKLERİ KAYDET',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-        ),
-      ),
-    );
-  }
-
-  // vehicle_edit_screen.dart - en alta bu metodları ekle:
-// Diğer widget metodları (SchoolVehicleFormScreen'den kopyala)
-
-
-  Widget _buildDateField(DateTime? selectedDate, ValueChanged<DateTime> onDateSelected) {
-    return InkWell(
-      onTap: () => _selectDate(context, selectedDate, onDateSelected),
-      child: Container(
-        width: double.infinity,
-        padding: EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.calendar_today, size: 20, color: Colors.grey[600]),
-            SizedBox(width: 12),
-            Text(
-              selectedDate != null
-                  ? '${selectedDate.day}/${selectedDate.month}/${selectedDate.year}'
-                  : 'Tarih Seçin',
-              style: TextStyle(
-                color: selectedDate != null ? Colors.black : Colors.grey[600],
-              ),
-            ),
-            Spacer(),
-            if (selectedDate != null)
-              _buildDateStatus(selectedDate),
-          ],
-        ),
-      ),
-    );
-  }
-
-
-// EKSİK METOD: _selectDate
-  Future<void> _selectDate(BuildContext context, DateTime? initialDate, ValueChanged<DateTime> onDateSelected) async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: initialDate ?? DateTime.now(),
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100),
-    );
-
-    if (picked != null) {
-      onDateSelected(picked);
-    }
-  }
-
-  bool _validateForm() {
-    bool isValid = _plateController.text.isNotEmpty &&
-        _modelController.text.isNotEmpty &&
-        _modelYearController.text.isNotEmpty &&
-        _capacityController.text.isNotEmpty &&
-        _driverNameController.text.isNotEmpty &&
-        _driverLicenseExpiry != null &&
-        _srcCertificateExpiry != null &&
-        _insuranceExpiry != null &&
-        _inspectionExpiry != null;
-
-    // Özel taşıma için rehber personel zorunlu
-    if (_transportType == 'private') {
-      isValid = isValid &&
-          _guideNameController.text.isNotEmpty &&
-          _guideAgeController.text.isNotEmpty;
-    }
-
-    // Okul seçimi zorunlu
-    isValid = isValid && _selectedSchoolIds.isNotEmpty;
-
-    return isValid;
-  }
-
-  Future<void> _submitForm() async {
-    if (!_validateForm()) {
-      _showSnackBar('Lütfen zorunlu alanları doldurunuz', Colors.orange);
-      return;
-    }
-
-    setState(() => _isSubmitting = true);
-
-    try {
-      // widget.vehicle['id'] integer geliyor, string'e çevir
-      final vehicleId = widget.vehicle['id'].toString();
-
-      await _dbService.updateVehicle(
-        vehicleId: vehicleId,
-        plate: _plateController.text,
-        model: _modelController.text,
-        modelYear: int.tryParse(_modelYearController.text) ?? 2023, // BU SATIRI EKLE
-        capacity: int.parse(_capacityController.text),
-        driverName: _driverNameController.text,
-        transportType: _transportType,
-        driverPhone: _driverPhoneController.text.isEmpty ? null : _driverPhoneController.text,
-        driverLicenseExpiry: _driverLicenseExpiry,
-        srcCertificateExpiry: _srcCertificateExpiry,
-        insuranceExpiry: _insuranceExpiry,
-        inspectionExpiry: _inspectionExpiry,
-        routePermitExpiry: _routePermitExpiry,
-        gCertificateExpiry: _gCertificateExpiry,
-        driverPhotoUrl: _driverPhotoUrl,
-        schoolIds: _selectedSchoolIds,
-      );
-
-      _showSnackBar('Araç bilgileri başarıyla güncellendi!', Colors.green);
-      Navigator.pop(context, true);
-
-    } catch (e) {
-      _showSnackBar('Güncelleme hatası: $e', Colors.red);
-    } finally {
-      setState(() => _isSubmitting = false);
-    }
-  }
-
-
-  Future<void> _pickGuidePhoto() async {
-    _showSnackBar('Rehber fotoğrafı yükleme yakında eklenecek');
-  }
-
-  void _showSnackBar(String message, [Color color = Colors.blue]) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: color,
       ),
     );
   }

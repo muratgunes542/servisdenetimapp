@@ -53,11 +53,20 @@ class _SchoolApplicationsScreenState extends State<SchoolApplicationsScreen> {
       // schoolId hem string hem int gelebilir
       final id = schoolId is String ? schoolId : schoolId.toString();
       final vehicles = await _dbService.getSchoolVehicles(id);
+
+      // Onay bekleyen araçları filtrele
       setState(() {
-        _selectedSchoolVehicles = vehicles.where((v) => v['is_approved'] == false).toList();
+        _selectedSchoolVehicles = vehicles.where((v) =>
+        v['is_approved'] == false || v['is_approved'] == null
+        ).toList();
       });
+
+      print('✅ Okul araçları yüklendi: ${_selectedSchoolVehicles.length} araç');
     } catch (e) {
-      print('Okul araçları yükleme hatası: $e');
+      print('❌ Okul araçları yükleme hatası: $e');
+      setState(() {
+        _selectedSchoolVehicles = [];
+      });
     }
   }
 

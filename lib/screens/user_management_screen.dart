@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import '/services/database_service.dart';
 import '/services/auth_service.dart';
 import '/utils/constants.dart';
 
@@ -9,157 +9,170 @@ class UserManagementScreen extends StatefulWidget {
 }
 
 class _UserManagementScreenState extends State<UserManagementScreen> {
-  final SupabaseClient _supabase = Supabase.instance.client;
+  final DatabaseService _dbService = DatabaseService();
   final AuthService _authService = AuthService();
+
   List<Map<String, dynamic>> _users = [];
+  List<Map<String, dynamic>> _schools = [];
   bool _isLoading = true;
-  bool _showAddUserForm = false;
+  bool _showAddForm = false;
+  String _searchQuery = '';
+  String _selectedSchoolFilter = '';
 
   // Form controllers
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _fullNameController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _departmentController = TextEditingController();
-  String _selectedUserType = 'denetim';
-  bool _isActive = true;
+  final _emailController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  String _selectedType = Constants.userTypeSchool;
+  String _selectedSchool = '';
+
+  // Edit form
+  Map<String, dynamic>? _editingUser;
+  final _editEmailController = TextEditingController();
+  final _editNameController = TextEditingController();
+  final _editPhoneController = TextEditingController();
+  String _editSelectedType = Constants.userTypeSchool;
+  String _editSelectedSchool = '';
 
   @override
   void initState() {
     super.initState();
-    _loadUsers();
+    _loadData();
   }
 
-  Future<void> _loadUsers() async {
+  Future<void> _loadData() async {
     try {
-      final response = await _supabase
-          .from(Constants.usersTable)
-          .select()
-          .order('created_at', ascending: false);
+      final users = await _dbService.getUsers();
+      final schools = await _dbService.getSchools();
 
       setState(() {
-        _users = response;
+        _users = users;
+        _schools = schools;
         _isLoading = false;
       });
     } catch (e) {
-      print('Kullanıcıları yükleme hatası: $e');
+      print('Veri yükleme hatası: $e');
       setState(() => _isLoading = false);
     }
   }
 
+  List<Map<String, dynamic>> get _filteredUsers {
+    var filtered = _users;
+
+    // Arama filtresi
+    if (_searchQuery.isNotEmpty) {
+      filtered = filtered.where((user) {
+        final name = user['full_name']?.toString().toLowerCase() ?? '';
+        final email = user['email']?.toString().toLowerCase() ?? '';
+        return name.contains(_searchQuery.toLowerCase()) ||
+            email.contains(_searchQuery.toLowerCase());
+      }).toList();
+    }
+
+    // Okul filtresi
+    if (_selectedSchoolFilter.isNotEmpty) {
+      filtered = filtered.where((user) {
+        return user['school_id']?.toString() == _selectedSchoolFilter;
+      }).toList();
+    }
+
+    return filtered;
+  }
+
+  // KULLANICI EKLEME - GÜNCELLENDİ (Daha iyi hata yönetimi)
   Future<void> _addUser() async {
-    if (_emailController.text.isEmpty ||
-        _passwordController.text.isEmpty ||
-        _fullNameController.text.isEmpty) {
-      _showSnackBar('Lütfen zorunlu alanları doldurunuz', Colors.orange);
+    if (_emailController.text.isEmpty || _nameController.text.isEmpty) {
+      _showSnackBar('Lütfen email ve ad soyad giriniz', Colors.orange);
       return;
     }
 
-    try {
-      final currentUser = await _authService.getCurrentUser();
+    // Email kontrolü
+    final email = _emailController.text.trim();
+    if (_users.any((user) => user['email'] == email)) {
+      _showSnackBar('Bu email adresi zaten kullanılıyor', Colors.red);
+      return;
+    }
 
-      final newUser = await _supabase
-          .from(Constants.usersTable)
-          .insert({
-        'email': _emailController.text.trim().toLowerCase(),
-        'password': _passwordController.text,
-        'full_name': _fullNameController.text.trim(),
-        'user_type': _selectedUserType,
+    setState(() => _isLoading = true);
+
+    try {
+      final newUser = {
+        'email': email,
+        'full_name': _nameController.text.trim(),
         'phone': _phoneController.text.trim(),
-        'department': _departmentController.text.trim(),
-        'is_active': _isActive,
-        'created_by': currentUser?['id'],
-      })
-          .select()
-          .single();
+        'user_type': _selectedType,
+        'school_id': _selectedType == Constants.userTypeSchool && _selectedSchool.isNotEmpty
+            ? _selectedSchool
+            : null,
+        'is_active': true,
+        'department': _getDepartmentByType(_selectedType),
+        'created_at': DateTime.now().toIso8601String(), // created_at ekle
+      };
+
+      print('🔄 HYBRID: Kullanıcı oluşturma başlatılıyor: $email');
+
+      // HYBRID kullanıcı oluşturma - DatabaseService'deki geliştirilmiş metodları kullan
+      await _dbService.createUser(newUser);
 
       _showSnackBar('Kullanıcı başarıyla eklendi', Colors.green);
-
       _clearForm();
-      _loadUsers();
-      setState(() => _showAddUserForm = false);
+      await _loadData(); // Verileri yeniden yükle
 
     } catch (e) {
-      print('Kullanıcı ekleme hatası: $e');
-      _showSnackBar('Kullanıcı eklenirken hata oluştu: $e', Colors.red);
+      print('❌ Kullanıcı oluşturma hatası: $e');
+      _showSnackBar('Kullanıcı eklenirken hata: ${e.toString()}', Colors.red);
+    } finally {
+      setState(() {
+        _isLoading = false;
+        _showAddForm = false;
+      });
     }
   }
 
-  Future<void> _updateUserStatus(String userId, bool isActive) async {
+  // KULLANICI GÜNCELLEME - GÜNCELLENDİ
+  Future<void> _updateUser() async {
+    if (_editingUser == null) return;
+
     try {
-      await _supabase
-          .from(Constants.usersTable)
-          .update({'is_active': isActive})
-          .eq('id', userId);
-
-      _showSnackBar('Kullanıcı durumu güncellendi', Colors.green);
-      _loadUsers();
-
-    } catch (e) {
-      print('Kullanıcı güncelleme hatası: $e');
-      _showSnackBar('Güncelleme sırasında hata oluştu', Colors.red);
-    }
-  }
-
-  Future<void> _resetUserPassword(String userId) async {
-    try {
-      await _supabase
-          .from(Constants.usersTable)
-          .update({
-        'password': '123456',
+      final updates = {
+        'email': _editEmailController.text.trim(),
+        'full_name': _editNameController.text.trim(),
+        'phone': _editPhoneController.text.trim(),
+        'user_type': _editSelectedType,
+        'school_id': _editSelectedType == Constants.userTypeSchool && _editSelectedSchool.isNotEmpty
+            ? _editSelectedSchool
+            : null,
+        'department': _getDepartmentByType(_editSelectedType),
         'updated_at': DateTime.now().toIso8601String(),
-      })
-          .eq('id', userId);
+      };
 
-      _showSnackBar('Şifre başarıyla sıfırlandı (123456)', Colors.green);
+      print('🔄 Kullanıcı güncelleniyor: ${_editingUser!['id']}');
+      await _dbService.updateUser(_editingUser!['id'].toString(), updates);
+
+      _showSnackBar('Kullanıcı başarıyla güncellendi', Colors.green);
+      _cancelEdit();
+      await _loadData();
+
     } catch (e) {
-      print('Şifre sıfırlama hatası: $e');
-      _showSnackBar('Şifre sıfırlanırken hata oluştu', Colors.red);
+      print('❌ Kullanıcı güncelleme hatası: $e');
+      _showSnackBar('Kullanıcı güncellenirken hata: $e', Colors.red);
     }
   }
 
-  void _showPasswordResetDialog(Map<String, dynamic> user) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Şifre Sıfırlama'),
-        content: Text('${user['full_name']} kullanıcısının şifresini sıfırlamak istediğinizden emin misiniz? Yeni şifre "123456" olarak ayarlanacak.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text('İptal'),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.of(context).pop();
-              await _resetUserPassword(user['id']);
-            },
-            child: Text('Sıfırla', style: TextStyle(color: Colors.orange)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _deleteUser(String userId, String userEmail) async {
-    final currentUser = await _authService.getCurrentUser();
-    if (currentUser?['id'] == userId) {
-      _showSnackBar('Kendi hesabınızı silemezsiniz', Colors.red);
-      return;
-    }
-
-    final confirmed = await showDialog(
+  // KULLANICI SİLME - GÜNCELLENDİ
+  Future<void> _deleteUser(String userId, String userName) async {
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text('Kullanıcıyı Sil'),
-        content: Text('$userEmail kullanıcısını silmek istediğinizden emin misiniz?'),
+        content: Text('$userName kullanıcısını silmek istediğinizden emin misiniz?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.pop(context, false),
             child: Text('İptal'),
           ),
           TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
+            onPressed: () => Navigator.pop(context, true),
             child: Text('Sil', style: TextStyle(color: Colors.red)),
           ),
         ],
@@ -168,29 +181,79 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
     if (confirmed == true) {
       try {
-        await _supabase
-            .from(Constants.usersTable)
-            .delete()
-            .eq('id', userId);
+        print('🗑️ Kullanıcı siliniyor: $userId');
+        // ID'yi string olarak gönder
+        await _dbService.deleteUser(userId.toString());
 
         _showSnackBar('Kullanıcı başarıyla silindi', Colors.green);
-        _loadUsers();
+        await _loadData();
 
       } catch (e) {
-        print('Kullanıcı silme hatası: $e');
-        _showSnackBar('Silme sırasında hata oluştu', Colors.red);
+        print('❌ Kullanıcı silme hatası: $e');
+        _showSnackBar('Kullanıcı silinirken hata: $e', Colors.red);
       }
+    }
+  }
+
+  // DURUM DEĞİŞTİRME - GÜNCELLENDİ
+  Future<void> _toggleUserStatus(String userId, bool currentStatus, String userName) async {
+    try {
+      final newStatus = !currentStatus;
+
+      // ID'yi string olarak gönder
+      await _dbService.updateUserStatus(userId.toString(), newStatus);
+
+      final statusText = newStatus ? 'aktif' : 'pasif';
+      _showSnackBar('$userName kullanıcısı $statusText yapıldı', Colors.green);
+      await _loadData();
+
+    } catch (e) {
+      print('❌ Durum değiştirme hatası: $e');
+      _showSnackBar('Durum değiştirilirken hata: $e', Colors.red);
+    }
+  }
+
+  String _getDepartmentByType(String userType) {
+    switch (userType) {
+      case Constants.userTypeIlce:
+        return 'İlçe MEM';
+      case Constants.userTypeDenetim:
+        return 'Denetim Birimi';
+      case Constants.userTypeSchool:
+        return 'Okul Müdürlüğü';
+      default:
+        return 'Belirtilmemiş';
     }
   }
 
   void _clearForm() {
     _emailController.clear();
-    _passwordController.clear();
-    _fullNameController.clear();
+    _nameController.clear();
     _phoneController.clear();
-    _departmentController.clear();
-    _selectedUserType = 'denetim';
-    _isActive = true;
+    _selectedType = Constants.userTypeSchool;
+    _selectedSchool = '';
+  }
+
+  void _cancelEdit() {
+    setState(() {
+      _editingUser = null;
+      _editEmailController.clear();
+      _editNameController.clear();
+      _editPhoneController.clear();
+      _editSelectedType = Constants.userTypeSchool;
+      _editSelectedSchool = '';
+    });
+  }
+
+  void _startEdit(Map<String, dynamic> user) {
+    setState(() {
+      _editingUser = user;
+      _editEmailController.text = user['email']?.toString() ?? '';
+      _editNameController.text = user['full_name']?.toString() ?? '';
+      _editPhoneController.text = user['phone']?.toString() ?? '';
+      _editSelectedType = user['user_type']?.toString() ?? Constants.userTypeSchool;
+      _editSelectedSchool = user['school_id']?.toString() ?? '';
+    });
   }
 
   void _showSnackBar(String message, Color color) {
@@ -203,240 +266,227 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     );
   }
 
-  Color _getUserTypeColor(String userType) {
-    switch (userType) {
-      case 'ilce': return Colors.blue;
-      case 'denetim': return Colors.green;
-      default: return Colors.grey;
-    }
-  }
-
-  String _getUserTypeText(String userType) {
-    switch (userType) {
-      case 'ilce': return 'İlçe MEM';
-      case 'denetim': return 'Denetim Görevlisi';
-      default: return userType;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        backgroundColor: Color(0xFFE3F2FD),
-        title: Text(
-          'Kullanıcı Yönetimi',
-          style: TextStyle(
-            color: Color(0xFF2196F3),
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: Color(0xFF2196F3)),
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.refresh, color: Color(0xFF2196F3)),
-            onPressed: _loadUsers,
-            tooltip: 'Yenile',
-          ),
-        ],
-      ),
-      body: Column(
+  // UI WIDGET'ları - OVERFLOW ÇÖZÜMLÜ
+  Widget _buildFilterBar() {
+    return Padding(
+      padding: EdgeInsets.all(16),
+      child: Column(
         children: [
-          Container(
-            padding: EdgeInsets.all(16),
-            color: Colors.white,
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Sistem Kullanıcıları',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[800],
-                    ),
-                  ),
-                ),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() => _showAddUserForm = !_showAddUserForm);
-                  },
-                  icon: Icon(Icons.person_add),
-                  label: Text('Yeni Kullanıcı Ekle'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Color(0xFF2196F3),
-                  ),
-                ),
-              ],
+          TextField(
+            decoration: InputDecoration(
+              labelText: 'Kullanıcı Ara',
+              prefixIcon: Icon(Icons.search),
+              border: OutlineInputBorder(),
             ),
+            onChanged: (value) => setState(() => _searchQuery = value),
           ),
-
-          if (_showAddUserForm) _buildAddUserForm(),
-
-          Expanded(
-            child: _isLoading
-                ? Center(child: CircularProgressIndicator())
-                : _users.isEmpty
-                ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.people_outline, size: 64, color: Colors.grey[400]),
-                  SizedBox(height: 16),
-                  Text(
-                    'Henüz kullanıcı bulunmuyor',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ],
-              ),
-            )
-                : ListView.builder(
-              itemCount: _users.length,
-              itemBuilder: (context, index) {
-                final user = _users[index];
-                return _buildUserCard(user);
-              },
+          SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: _selectedSchoolFilter.isEmpty ? null : _selectedSchoolFilter,
+            decoration: InputDecoration(
+              labelText: 'Okula Göre Filtrele',
+              border: OutlineInputBorder(),
             ),
+            items: [
+              DropdownMenuItem(value: '', child: Text('Tüm Okullar')),
+              ..._schools.map((school) => DropdownMenuItem(
+                value: school['id'].toString(),
+                child: Text(school['name']?.toString() ?? ''),
+              )),
+            ],
+            onChanged: (value) => setState(() => _selectedSchoolFilter = value ?? ''),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildAddUserForm() {
+  Widget _buildStatsCard() {
+    final activeUsers = _users.where((user) => user['is_active'] == true).length;
+    final schoolUsers = _users.where((user) => user['user_type'] == Constants.userTypeSchool).length;
+    final ilceUsers = _users.where((user) => user['user_type'] == Constants.userTypeIlce).length;
+    final denetimUsers = _users.where((user) => user['user_type'] == Constants.userTypeDenetim).length;
+
     return Card(
       margin: EdgeInsets.all(16),
-      elevation: 2,
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Wrap(
+          spacing: 16,
+          runSpacing: 8,
+          children: [
+            _buildStatItem('Toplam', _users.length, Icons.people),
+            _buildStatItem('Aktif', activeUsers, Icons.check_circle, color: Colors.green),
+            _buildStatItem('Okul', schoolUsers, Icons.school),
+            _buildStatItem('İlçe', ilceUsers, Icons.account_balance),
+            _buildStatItem('Denetim', denetimUsers, Icons.security),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatItem(String label, int count, IconData icon, {Color color = Colors.blue}) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          SizedBox(width: 4),
+          Text('$count', style: TextStyle(fontWeight: FontWeight.bold, color: color)),
+          SizedBox(width: 4),
+          Text(label, style: TextStyle(fontSize: 12, color: color)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAddForm() {
+    return Card(
+      margin: EdgeInsets.all(16),
       child: Padding(
         padding: EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Yeni Kullanıcı Ekle',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.grey[800],
-              ),
-            ),
+            Text('Yeni Kullanıcı Ekle', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             SizedBox(height: 16),
-
             TextField(
               controller: _emailController,
-              decoration: InputDecoration(
-                labelText: 'Email *',
-                prefixIcon: Icon(Icons.email),
-                border: OutlineInputBorder(),
-                hintText: 'ornek@mem.gov.tr',
-              ),
+              decoration: InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
               keyboardType: TextInputType.emailAddress,
             ),
             SizedBox(height: 12),
-
             TextField(
-              controller: _passwordController,
-              decoration: InputDecoration(
-                labelText: 'Şifre *',
-                prefixIcon: Icon(Icons.lock),
-                border: OutlineInputBorder(),
-                hintText: '123456',
-              ),
-              obscureText: true,
+              controller: _nameController,
+              decoration: InputDecoration(labelText: 'Ad Soyad', border: OutlineInputBorder()),
             ),
             SizedBox(height: 12),
-
-            TextField(
-              controller: _fullNameController,
-              decoration: InputDecoration(
-                labelText: 'Ad Soyad *',
-                prefixIcon: Icon(Icons.person),
-                border: OutlineInputBorder(),
-                hintText: 'Ahmet Yılmaz',
-              ),
-            ),
-            SizedBox(height: 12),
-
-            DropdownButtonFormField<String>(
-              value: _selectedUserType,
-              decoration: InputDecoration(
-                labelText: 'Kullanıcı Tipi *',
-                prefixIcon: Icon(Icons.assignment_ind),
-                border: OutlineInputBorder(),
-              ),
-              items: [
-                DropdownMenuItem(value: 'denetim', child: Text('Denetim Görevlisi')),
-                DropdownMenuItem(value: 'ilce', child: Text('İlçe MEM')),
-                DropdownMenuItem(value: 'school', child: Text('Okul Kullanıcısı')), // BU SATIRI EKLE
-              ],
-              onChanged: (value) {
-                setState(() => _selectedUserType = value!);
-              },
-            ),
-            SizedBox(height: 12),
-
             TextField(
               controller: _phoneController,
-              decoration: InputDecoration(
-                labelText: 'Telefon',
-                prefixIcon: Icon(Icons.phone),
-                border: OutlineInputBorder(),
-                hintText: '05551234567',
-              ),
+              decoration: InputDecoration(labelText: 'Telefon', border: OutlineInputBorder()),
               keyboardType: TextInputType.phone,
             ),
             SizedBox(height: 12),
-
-            TextField(
-              controller: _departmentController,
-              decoration: InputDecoration(
-                labelText: 'Departman',
-                prefixIcon: Icon(Icons.business),
-                border: OutlineInputBorder(),
-                hintText: 'Denetim Birimi',
-              ),
-            ),
-            SizedBox(height: 12),
-
-            Row(
-              children: [
-                Checkbox(
-                  value: _isActive,
-                  onChanged: (value) {
-                    setState(() => _isActive = value!);
-                  },
-                ),
-                Text('Kullanıcı Aktif'),
+            DropdownButtonFormField<String>(
+              value: _selectedType,
+              decoration: InputDecoration(labelText: 'Kullanıcı Tipi', border: OutlineInputBorder()),
+              items: [
+                DropdownMenuItem(value: Constants.userTypeSchool, child: Text('Okul Kullanıcısı')),
+                DropdownMenuItem(value: Constants.userTypeIlce, child: Text('İlçe Kullanıcısı')),
+                DropdownMenuItem(value: Constants.userTypeDenetim, child: Text('Denetim Kullanıcısı')),
               ],
+              onChanged: (value) => setState(() => _selectedType = value ?? Constants.userTypeSchool),
             ),
+            if (_selectedType == Constants.userTypeSchool) ...[
+              SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _selectedSchool.isEmpty ? null : _selectedSchool,
+                decoration: InputDecoration(labelText: 'Okul', border: OutlineInputBorder()),
+                items: _schools.map((school) => DropdownMenuItem(
+                  value: school['id'].toString(),
+                  child: Text(school['name']?.toString() ?? ''),
+                )).toList(),
+                onChanged: (value) => setState(() => _selectedSchool = value ?? ''),
+              ),
+            ],
             SizedBox(height: 16),
-
             Row(
               children: [
                 Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _addUser,
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                    child: _isLoading
+                        ? SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                        : Text('Kullanıcı Ekle'),
+                  ),
+                ),
+                SizedBox(width: 8),
+                Expanded(
                   child: OutlinedButton(
-                    onPressed: () {
-                      _clearForm();
-                      setState(() => _showAddUserForm = false);
-                    },
+                    onPressed: _isLoading ? null : () => setState(() => _showAddForm = false),
                     child: Text('İptal'),
                   ),
                 ),
-                SizedBox(width: 12),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEditForm() {
+    if (_editingUser == null) return SizedBox.shrink();
+
+    return Card(
+      margin: EdgeInsets.all(16),
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Kullanıcıyı Düzenle', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            SizedBox(height: 16),
+            TextField(
+              controller: _editEmailController,
+              decoration: InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
+            ),
+            SizedBox(height: 12),
+            TextField(
+              controller: _editNameController,
+              decoration: InputDecoration(labelText: 'Ad Soyad', border: OutlineInputBorder()),
+            ),
+            SizedBox(height: 12),
+            TextField(
+              controller: _editPhoneController,
+              decoration: InputDecoration(labelText: 'Telefon', border: OutlineInputBorder()),
+            ),
+            SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _editSelectedType,
+              decoration: InputDecoration(labelText: 'Kullanıcı Tipi', border: OutlineInputBorder()),
+              items: [
+                DropdownMenuItem(value: Constants.userTypeSchool, child: Text('Okul Kullanıcısı')),
+                DropdownMenuItem(value: Constants.userTypeIlce, child: Text('İlçe Kullanıcısı')),
+                DropdownMenuItem(value: Constants.userTypeDenetim, child: Text('Denetim Kullanıcısı')),
+              ],
+              onChanged: (value) => setState(() => _editSelectedType = value ?? Constants.userTypeSchool),
+            ),
+            if (_editSelectedType == Constants.userTypeSchool) ...[
+              SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _editSelectedSchool.isEmpty ? null : _editSelectedSchool,
+                decoration: InputDecoration(labelText: 'Okul', border: OutlineInputBorder()),
+                items: _schools.map((school) => DropdownMenuItem(
+                  value: school['id'].toString(),
+                  child: Text(school['name']?.toString() ?? ''),
+                )).toList(),
+                onChanged: (value) => setState(() => _editSelectedSchool = value ?? ''),
+              ),
+            ],
+            SizedBox(height: 16),
+            Row(
+              children: [
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _addUser,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xFF2196F3),
-                    ),
-                    child: Text('Kullanıcı Ekle'),
+                    onPressed: _isLoading ? null : _updateUser,
+                    child: _isLoading
+                        ? SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                        : Text('Güncelle'),
+                  ),
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _isLoading ? null : _cancelEdit,
+                    child: Text('İptal'),
                   ),
                 ),
               ],
@@ -448,111 +498,192 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   Widget _buildUserCard(Map<String, dynamic> user) {
+    final isActive = user['is_active'] == true;
+    final schoolName = user['schools'] != null
+        ? user['schools']['name']?.toString()
+        : 'Okul Atanmamış';
+
     return Card(
       margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      elevation: 1,
       child: ListTile(
-        leading: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: _getUserTypeColor(user['user_type']).withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Icon(
-            user['user_type'] == 'ilce'
-                ? Icons.admin_panel_settings
-                : Icons.assignment_ind,
-            color: _getUserTypeColor(user['user_type']),
-            size: 20,
+        leading: CircleAvatar(
+          backgroundColor: _getUserColor(user['user_type']),
+          child: Text(
+            user['full_name']?.toString().substring(0, 1).toUpperCase() ?? '?',
+            style: TextStyle(color: Colors.white),
           ),
         ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              user['full_name'],
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: user['is_active'] ? Colors.grey[800] : Colors.grey[400],
-              ),
-            ),
-            Text(
-              user['email'],
-              style: TextStyle(
-                fontSize: 12,
-                color: user['is_active'] ? Colors.grey[600] : Colors.grey[400],
-              ),
-            ),
-          ],
-        ),
+        title: Text(user['full_name']?.toString() ?? ''),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(height: 4),
+            Text(user['email']?.toString() ?? ''),
+            Text('${_getUserTypeText(user['user_type'])} • $schoolName'),
             Row(
               children: [
                 Container(
-                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: _getUserTypeColor(user['user_type']).withOpacity(0.1),
+                    color: isActive ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
-                    _getUserTypeText(user['user_type']),
+                    isActive ? 'Aktif' : 'Pasif',
                     style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: _getUserTypeColor(user['user_type']),
+                      color: isActive ? Colors.green : Colors.red,
+                      fontSize: 12,
                     ),
                   ),
                 ),
-                SizedBox(width: 8),
-                if (user['department'] != null)
-                  Text(
-                    user['department'],
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
               ],
             ),
           ],
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Şifre Sıfırlama Butonu - FutureBuilder ile
-            FutureBuilder<bool>(
-              future: _authService.isIlceUser(),
-              builder: (context, snapshot) {
-                if (snapshot.data == true) {
-                  return IconButton(
-                    icon: Icon(Icons.vpn_key, color: Colors.blue),
-                    onPressed: () => _showPasswordResetDialog(user),
-                    tooltip: 'Şifre Sıfırla',
-                  );
-                }
-                return SizedBox.shrink();
-              },
-            ),
-            // Aktif/Pasif Toggle
-            IconButton(
-              icon: Icon(
-                user['is_active'] ? Icons.toggle_on : Icons.toggle_off,
-                color: user['is_active'] ? Colors.green : Colors.grey,
-                size: 30,
+        trailing: PopupMenuButton(
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'edit',
+              child: Row(
+                children: [Icon(Icons.edit, size: 18), SizedBox(width: 8), Text('Düzenle')],
               ),
-              onPressed: () => _updateUserStatus(user['id'], !user['is_active']),
-              tooltip: user['is_active'] ? 'Pasif Yap' : 'Aktif Yap',
             ),
-            // Sil Butonu
-            IconButton(
-              icon: Icon(Icons.delete, color: Colors.red),
-              onPressed: () => _deleteUser(user['id'], user['email']),
-              tooltip: 'Kullanıcıyı Sil',
+            PopupMenuItem(
+              value: 'toggle',
+              child: Row(
+                children: [
+                  Icon(isActive ? Icons.block : Icons.check_circle, size: 18),
+                  SizedBox(width: 8),
+                  Text(isActive ? 'Pasif Yap' : 'Aktif Yap'),
+                ],
+              ),
             ),
+            PopupMenuItem(
+              value: 'delete',
+              child: Row(
+                children: [Icon(Icons.delete, size: 18, color: Colors.red), SizedBox(width: 8), Text('Sil', style: TextStyle(color: Colors.red))],
+              ),
+            ),
+          ],
+          onSelected: (value) {
+            switch (value) {
+              case 'edit':
+                _startEdit(user);
+                break;
+              case 'toggle':
+                _toggleUserStatus(user['id'].toString(), isActive, user['full_name']?.toString() ?? '');
+                break;
+              case 'delete':
+                _deleteUser(user['id'].toString(), user['full_name']?.toString() ?? '');
+                break;
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  Color _getUserColor(String? userType) {
+    switch (userType) {
+      case Constants.userTypeIlce:
+        return Colors.blue;
+      case Constants.userTypeDenetim:
+        return Colors.orange;
+      case Constants.userTypeSchool:
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  String _getUserTypeText(String? userType) {
+    switch (userType) {
+      case Constants.userTypeIlce:
+        return 'İlçe Kullanıcısı';
+      case Constants.userTypeDenetim:
+        return 'Denetim Kullanıcısı';
+      case Constants.userTypeSchool:
+        return 'Okul Kullanıcısı';
+      default:
+        return 'Kullanıcı';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Kullanıcı Yönetimi'),
+        backgroundColor: Color(0xFF2196F3),
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+              icon: Icon(Icons.refresh),
+              onPressed: _loadData,
+              tooltip: 'Yenile'
+          ),
+          IconButton(
+            icon: Icon(_showAddForm ? Icons.close : Icons.person_add),
+            onPressed: () => setState(() => _showAddForm = !_showAddForm),
+            tooltip: _showAddForm ? 'Formu Kapat' : 'Yeni Kullanıcı',
+          ),
+        ],
+      ),
+      body: SingleChildScrollView( // TÜM İÇERİĞİ SCROLL YAPALIM
+        child: Column(
+          children: [
+            // Filtre çubuğu
+            _buildFilterBar(),
+
+            // İstatistik kartı
+            _buildStatsCard(),
+
+            // Formlar
+            if (_showAddForm) _buildAddForm(),
+            if (_editingUser != null) _buildEditForm(),
+
+            // Liste - SABİT YÜKSEKLİK VEYA SHRINKWRAP
+            Container(
+              constraints: BoxConstraints(
+                minHeight: MediaQuery.of(context).size.height * 0.4, // Minimum yükseklik
+              ),
+              child: _isLoading
+                  ? Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+                  : _filteredUsers.isEmpty
+                  ? Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.people_outline, size: 64, color: Colors.grey[400]),
+                      SizedBox(height: 16),
+                      Text('Kullanıcı bulunamadı'),
+                      SizedBox(height: 8),
+                      Text(
+                        'Arama kriterlerinizi değiştirin veya yeni kullanıcı ekleyin',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              )
+                  : ListView.builder(
+                physics: NeverScrollableScrollPhysics(), // İç scroll'u devre dışı bırak
+                shrinkWrap: true, // İçeriğe göre boyutlandır
+                itemCount: _filteredUsers.length,
+                itemBuilder: (context, index) => _buildUserCard(_filteredUsers[index]),
+              ),
+            ),
+            SizedBox(height: 20), // Alt boşluk
           ],
         ),
       ),
     );
   }
-}
+  }

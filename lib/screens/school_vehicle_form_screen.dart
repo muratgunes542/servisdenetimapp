@@ -26,6 +26,10 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
   final TextEditingController _guideNameController = TextEditingController();
   final TextEditingController _guideAgeController = TextEditingController();
 
+  final FocusNode _guideAgeFocusNode = FocusNode();
+  final FocusNode _plateFocusNode = FocusNode();
+  final FocusNode _modelFocusNode = FocusNode();
+
   // Date fields
   DateTime? _driverLicenseExpiry;
   DateTime? _srcCertificateExpiry;
@@ -47,6 +51,19 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
   void initState() {
     super.initState();
     _loadSchools();
+    _guideAgeFocusNode.addListener(() {
+      if (!_guideAgeFocusNode.hasFocus) {
+        // Klavye kapatıldığında ekranı kaydır
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollController.animateTo(
+            0,
+            duration: Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        });
+      }
+    });
+
   }
 
   Future<void> _loadSchools() async {
@@ -65,28 +82,7 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
     }
   }
 
-  // AYRI BİR METOD OLUŞTUR:
-  Future<void> _setDefaultSchool() async {
-    try {
-      final currentUser = await _authService.getCurrentUser();
-      final userSchool = currentUser?['department'];
 
-      if (userSchool != null && _schools.isNotEmpty) {
-        final school = _schools.firstWhere(
-                (s) => s['name'] == userSchool,
-            orElse: () => _schools.first
-        );
-
-        if (mounted) {
-          setState(() {
-            _selectedSchoolIds.add(school['id'].toString());
-          });
-        }
-      }
-    } catch (e) {
-      print('Varsayılan okul ayarlama hatası: $e');
-    }
-  }
 
   // Taşıma türü seçimi ekle
   Widget _buildTransportTypeSection() {
@@ -158,6 +154,7 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
   // Formda transport type section'ı ekle
   Widget _buildForm() {
     return SingleChildScrollView(
+      controller: _scrollController,
       padding: EdgeInsets.all(16),
       child: Column(
         children: [
@@ -312,7 +309,9 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
   }
 
   Widget _buildSchoolCheckbox(Map<String, dynamic> school) {
-    final isSelected = _selectedSchoolIds.contains(school['id']);
+    // OKUL ID'SİNİ STRING'E ÇEVİR
+    final schoolId = school['id'].toString();
+    final isSelected = _selectedSchoolIds.contains(schoolId);
 
     return Card(
       margin: EdgeInsets.only(bottom: 8),
@@ -322,17 +321,56 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
         onChanged: (selected) {
           setState(() {
             if (selected == true) {
-              _selectedSchoolIds.add(school['id']);
+              _selectedSchoolIds.add(schoolId); // STRING OLARAK EKLE
             } else {
-              _selectedSchoolIds.remove(school['id']);
+              _selectedSchoolIds.remove(schoolId); // STRING OLARAK KALDIR
             }
           });
         },
-        title: Text(school['name']),
-        subtitle: Text(school['district']),
+        title: Text(school['name'] ?? ''),
+        subtitle: Text(school['district'] ?? ''),
         secondary: Icon(Icons.school, color: Color(0xFF2196F3)),
       ),
     );
+  }
+
+// Toplu işlem metodlarını da düzelt
+  void _selectAllSchools() {
+    setState(() {
+      // TÜM OKUL ID'LERİNİ STRING'E ÇEVİR
+      _selectedSchoolIds = _schools.map((school) => school['id'].toString()).toList();
+    });
+    _showSnackBar('Tüm okullar seçildi');
+  }
+
+  void _deselectAllSchools() {
+    setState(() {
+      _selectedSchoolIds.clear();
+    });
+    _showSnackBar('Tüm okullar kaldırıldı');
+  }
+
+// Varsayılan okul ayarlama metodunu da düzelt
+  Future<void> _setDefaultSchool() async {
+    try {
+      final currentUser = await _authService.getCurrentUser();
+      final userSchool = currentUser?['department'];
+
+      if (userSchool != null && _schools.isNotEmpty) {
+        final school = _schools.firstWhere(
+                (s) => s['name'] == userSchool,
+            orElse: () => _schools.first
+        );
+
+        if (mounted) {
+          setState(() {
+            _selectedSchoolIds.add(school['id'].toString()); // STRING'E ÇEVİR
+          });
+        }
+      }
+    } catch (e) {
+      print('Varsayılan okul ayarlama hatası: $e');
+    }
   }
   @override
   Widget build(BuildContext context) {
@@ -342,7 +380,9 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
         title: Text('Yeni Servis Aracı Kaydı'),
         backgroundColor: Color(0xFFE3F2FD),
       ),
-      body: _isSubmitting ? _buildLoading() : _buildForm(),
+      body: _isSubmitting
+          ? _buildLoading()
+          : _buildForm(),
     );
   }
 
@@ -388,16 +428,17 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
       'Araç Bilgileri',
       Icons.directions_bus,
       [
-        _buildTextField('Plaka *', _plateController),
+        _buildTextField('Plaka *', _plateController, hint: 'Örn:52S2001'),
+
         SizedBox(height: 12),
-        _buildTextField('Model *', _modelController),
+        _buildTextField('Marka/Model *', _modelController, hint: 'Örn:FORD TRANSİT'),
         SizedBox(height: 12),
         _buildTextField('Model Yılı *', _modelYearController,
-            hint: '2023',
+            hint: 'Örn:2023',
             keyboardType: TextInputType.number
         ),
         SizedBox(height: 12),
-        _buildTextField('Kapasite *', _capacityController, keyboardType: TextInputType.number),
+        _buildTextField('Kapasite *', _capacityController, hint: 'Örn:19', keyboardType: TextInputType.number),
       ],
     );
   }
@@ -409,9 +450,9 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
       'Sürücü Bilgileri',
       Icons.person,
       [
-        _buildTextField('Sürücü Adı Soyadı *', _driverNameController, hint: 'Mehmet Demir'),
+        _buildTextField('Sürücü Adı Soyadı *', _driverNameController, hint: 'Örn:Mehmet Demir'),
         SizedBox(height: 12),
-        _buildTextField('Sürücü Telefonu', _driverPhoneController, hint: '0555 123 4567'),
+        _buildTextField('Sürücü Telefonu', _driverPhoneController, hint: 'Örn:0555 123 4567'),
         SizedBox(height: 12),
         _buildPhotoField('Sürücü Fotoğrafı *', _driverPhotoUrl, _pickDriverPhoto),
         SizedBox(height: 12),
@@ -634,12 +675,14 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
   }
 
   Widget _buildSubmitButton() {
-    final isValid = _validateForm();
+    final isValid = _validateForm() && _selectedSchoolIds.isNotEmpty;
 
     return SizedBox(
       width: double.infinity,
       height: 55,
-      child: ElevatedButton(
+      child: _isSubmitting
+          ? _buildLoadingButton()
+          : ElevatedButton(
         onPressed: isValid ? _submitForm : null,
         style: ElevatedButton.styleFrom(
           backgroundColor: isValid ? Color(0xFF2196F3) : Colors.grey[400],
@@ -649,6 +692,33 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
           'KAYDET VE ONAYA GÖNDER',
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
         ),
+      ),
+    );
+  }
+
+  Widget _buildLoadingButton() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.blue[400],
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.white,
+            ),
+          ),
+          SizedBox(width: 12),
+          Text(
+            'KAYDEDİLİYOR...',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+        ],
       ),
     );
   }
@@ -687,14 +757,24 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
     setState(() => _isSubmitting = true);
 
     try {
+      // PLAKA KONTROLÜ
+      final plate = _plateController.text.trim();
+      final plateExists = await _dbService.checkPlateExists(plate);
+
+      if (plateExists) {
+        _showPlateExistsError(plate);
+        return;
+      }
+
+      // ARAÇ OLUŞTURMA
       await _dbService.createVehicle(
-        plate: _plateController.text,
-        model: _modelController.text,
+        plate: plate,
+        model: _modelController.text.trim(),
         modelYear: int.tryParse(_modelYearController.text) ?? 2023,
         capacity: int.parse(_capacityController.text),
-        driverName: _driverNameController.text,
-        transportType: _transportType, // ARTIK TANIMLI
-        driverPhone: _driverPhoneController.text.isEmpty ? null : _driverPhoneController.text,
+        driverName: _driverNameController.text.trim(),
+        transportType: _transportType,
+        driverPhone: _driverPhoneController.text.isEmpty ? null : _driverPhoneController.text.trim(),
         driverLicenseExpiry: _driverLicenseExpiry,
         srcCertificateExpiry: _srcCertificateExpiry,
         insuranceExpiry: _insuranceExpiry,
@@ -705,12 +785,11 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
         schoolIds: _selectedSchoolIds,
       );
 
-      _showSnackBar('Araç kaydı başarıyla oluşturuldu! İlçe onayına gönderildi.', Colors.green);
-
-      Navigator.pop(context, true);
+      // BAŞARILI MESAJI
+      _showSuccessDialog();
 
     } catch (e) {
-      _showSnackBar('Kayıt sırasında hata oluştu: $e', Colors.red);
+      _handleSubmitError(e);
     } finally {
       if (mounted) {
         setState(() => _isSubmitting = false);
@@ -718,64 +797,126 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
     }
   }
 
-  Widget _buildGuideSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Rehber Bilgileri',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+// PLAKA MEVCUT HATASI
+  void _showPlateExistsError(String plate) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.error, color: Colors.orange, size: 30),
+            SizedBox(width: 12),
+            Text('Plaka Mevcut!'),
+          ],
         ),
-        SizedBox(height: 16),
-        TextFormField(
-          controller: _guideNameController,
-          decoration: InputDecoration(
-            labelText: 'Rehber Adı Soyadı',
-            border: OutlineInputBorder(),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('$plate plakalı araç zaten sistemde kayıtlı.'),
+            SizedBox(height: 8),
+            Text('Lütfen farklı bir plaka girin veya mevcut aracı düzenleyin.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('TAMAM'),
           ),
-        ),
-        SizedBox(height: 16),
-        TextFormField(
-          controller: _guideAgeController,
-          decoration: InputDecoration(
-            labelText: 'Rehber Yaşı',
-            border: OutlineInputBorder(),
-          ),
-          keyboardType: TextInputType.number,
-        ),
-        SizedBox(height: 16),
-      ],
+        ],
+      ),
     );
   }
 
-  // Don't forget to dispose the controllers
-  @override
-  void dispose() {
-    _guideNameController.dispose();
-    _guideAgeController.dispose();
-    super.dispose();
+// HATA YÖNETİMİ
+  void _handleSubmitError(dynamic e) {
+    final errorMessage = e.toString();
+
+    if (errorMessage.contains('duplicate key') || errorMessage.contains('plaka')) {
+      _showPlateExistsError(_plateController.text.trim());
+    } else if (errorMessage.contains('HandshakeException')) {
+      _showSnackBar('İnternet bağlantı hatası. Lütfen tekrar deneyin.', Colors.red);
+    } else {
+      _showSnackBar('Kayıt sırasında hata oluştu: ${e.toString()}', Colors.red);
+    }
+
+    print('❌ Araç oluşturma hatası: $e');
   }
 
-
-// Toplu işlem metodları
-  void _selectAllSchools() {
-    setState(() {
-      _selectedSchoolIds = _schools.map((school) => school['id'].toString()).toList();
-    });
-    _showSnackBar('Tüm okullar seçildi');
+  void _showSuccessDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false, // KULLANICI TIKLAMADAN KAPANMASIN
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.green, size: 30),
+            SizedBox(width: 12),
+            Text('Başarılı!', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Araç kaydı başarıyla oluşturuldu!', style: TextStyle(fontSize: 16)),
+            SizedBox(height: 8),
+            Text('Plaka: ${_plateController.text.toUpperCase()}', style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 4),
+            Text('Sürücü: ${_driverNameController.text}'),
+            SizedBox(height: 12),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info, color: Colors.blue, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Araç ilçe onayına gönderildi. Onaylandıktan sonra sistemde aktif olacaktır.',
+                      style: TextStyle(fontSize: 12, color: Colors.blue[700]),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              // SADECE DIALOG'U KAPAT, FORMU TEMİZLEME
+              Navigator.pop(context);
+            },
+            child: Text('YENİ ARAÇ EKLE'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              // FORMU TEMİZLE VE EKRANI KAPAT
+              _clearForm();
+              Navigator.pop(context); // Dialog'u kapat
+              Navigator.pop(context, true); // Ekranı kapat ve geri dön
+            },
+            child: Text('TAMAM'),
+          ),
+        ],
+      ),
+    );
   }
 
-  void _deselectAllSchools() {
-    setState(() {
-      _selectedSchoolIds.clear();
-    });
-    _showSnackBar('Tüm okullar kaldırıldı');
-  }  void _clearForm() {
+  void _clearForm() {
     _plateController.clear();
     _modelController.clear();
+    _modelYearController.clear();
     _capacityController.clear();
     _driverNameController.clear();
     _driverPhoneController.clear();
+    _guideNameController.clear();
+    _guideAgeController.clear();
 
     setState(() {
       _driverLicenseExpiry = null;
@@ -784,11 +925,63 @@ class _SchoolVehicleFormScreenState extends State<SchoolVehicleFormScreen> {
       _inspectionExpiry = null;
       _routePermitExpiry = null;
       _gCertificateExpiry = null;
-      _fireExtinguisherExpiry = null;
       _driverPhotoUrl = null;
       _vehiclePhotoUrl = null;
+      _transportType = 'private'; // Varsayılan değere resetle
+      _selectedSchoolIds = []; // Seçili okulları temizle
     });
   }
+
+  Widget _buildGuideSection() {
+    return _buildSection(
+      'Rehber Bilgileri *',
+      Icons.people,
+      [
+        TextFormField(
+          controller: _guideNameController,
+          decoration: InputDecoration(
+            labelText: 'Rehber Adı Soyadı',
+            border: OutlineInputBorder(),
+          ),
+          textInputAction: TextInputAction.next,
+          onFieldSubmitted: (_) {
+            // Sonraki alana focus
+            FocusScope.of(context).requestFocus(_guideAgeFocusNode);
+          },
+        ),
+        SizedBox(height: 16),
+        TextFormField(
+          controller: _guideAgeController,
+          focusNode: _guideAgeFocusNode,
+          decoration: InputDecoration(
+            labelText: 'Rehber Yaşı',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: TextInputType.number,
+          textInputAction: TextInputAction.done,
+          onFieldSubmitted: (_) {
+            // Klavyeyi kapat
+            _guideAgeFocusNode.unfocus();
+          },
+        ),
+      ],
+    );
+  }
+
+  // Scroll controller ekle
+  final ScrollController _scrollController = ScrollController();
+
+
+  // Don't forget to dispose the controllers
+  @override
+  void dispose() {
+    _guideAgeFocusNode.dispose();
+    _plateFocusNode.dispose();
+    _modelFocusNode.dispose();
+    super.dispose();
+  }
+
+
 
   void _showSnackBar(String message, [Color color = Colors.blue]) {
     ScaffoldMessenger.of(context).showSnackBar(

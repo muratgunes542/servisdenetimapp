@@ -23,13 +23,39 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
 
   Future<void> _loadPendingVehicles() async {
     try {
+      print('🔄🔄 BEKLEYEN ARAÇLAR YÜKLENİYOR...');
       final vehicles = await _dbService.getAllVehicles();
+
+      print('🔄 Tüm araçlar: ${vehicles.length}');
+
+      // HER ARACIN DURUMUNU LOGLA
+      for (var vehicle in vehicles) {
+        print('🚗 ${vehicle['plate']} - is_approved: ${vehicle['is_approved']} - rejection: ${vehicle['rejection_reason']}');
+      }
+
+      // BEKLEYEN ARAÇLARI FİLTRELE
+      final pendingVehicles = vehicles.where((v) {
+        final isPending = v['is_approved'] == false;
+        print('🔍 ${v['plate']} - is_approved: ${v['is_approved']} -> Bekleyen mi?: $isPending');
+        return isPending;
+      }).toList();
+
+      print('🔄 Bekleyen araçlar: ${pendingVehicles.length}');
+
+      if (!mounted) return;
+
       setState(() {
-        _pendingVehicles = vehicles.where((v) => v['is_approved'] == false).toList();
+        _pendingVehicles = pendingVehicles;
         _isLoading = false;
       });
+
+      print('✅ UI güncellendi - ${_pendingVehicles.length} bekleyen araç');
+
     } catch (e) {
-      print('Bekleyen araç yükleme hatası: $e');
+      print('❌ Bekleyen araç yükleme hatası: $e');
+
+      if (!mounted) return;
+
       setState(() => _isLoading = false);
     }
   }
@@ -37,18 +63,31 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
   Future<void> _approveVehicle(Map<String, dynamic> vehicle) async {
     try {
       final currentUser = await _authService.getCurrentUser();
-      // vehicle['id'] integer geliyor, string'e çevir
-      await _dbService.approveVehicle(vehicle['id'].toString(), currentUser?['id']?.toString() ?? '');
+      final userId = currentUser?['id']?.toString() ?? '';
+
+      print('✅ Araç onaylanıyor: ${vehicle['plate']} - Kullanıcı: $userId');
+
+      await _dbService.approveVehicle(vehicle['id'].toString(), userId);
+
       _showSnackBar('${vehicle['plate']} onaylandı', Colors.green);
-      _loadPendingVehicles();
+
+      // MOUNTED KONTROLÜ
+      if (mounted) {
+        await _loadPendingVehicles();
+      }
+
     } catch (e) {
-      _showSnackBar('Onay hatası: $e', Colors.red);
+      print('❌ Onay hatası: $e');
+      _showSnackBar('Onay hatası: ${e.toString()}', Colors.red);
     }
   }
+
+  /// VehicleApprovalScreen.dart - DIALOG İÇİN DOĞRU CONTEXT KULLANIMI
 
   Future<void> _rejectVehicle(Map<String, dynamic> vehicle) async {
     final reasonController = TextEditingController();
 
+    // showDialog sonucunu bekle
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -66,6 +105,7 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
               decoration: InputDecoration(
                 hintText: 'Red sebebini yazın...',
                 border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.all(12),
               ),
               maxLines: 3,
             ),
@@ -73,7 +113,7 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.of(context).pop(false), // SADECE DIALOG'U KAPAT
             child: Text('İptal'),
           ),
           ElevatedButton(
@@ -84,7 +124,7 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
                 );
                 return;
               }
-              Navigator.pop(context, true);
+              Navigator.of(context).pop(true); // SADECE DIALOG'U KAPAT
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: Text('REDDET'),
@@ -93,104 +133,170 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
       ),
     );
 
+    // Dialog kapandıktan SONRA reddetme işlemini yap
     if (result == true) {
       await _performRejection(vehicle, reasonController.text.trim());
     }
+    // BU SATIRDA EKRAN KAPANMAMALI - BURADA NAVIGATOR.POP OLMAMALI
   }
+
+
+
+  // VehicleApprovalScreen.dart - EN BASİT ÇÖZÜM
 
   Future<void> _performRejection(Map<String, dynamic> vehicle, String reason) async {
     try {
       final currentUser = await _authService.getCurrentUser();
+      final userId = currentUser?['id']?.toString() ?? '';
+
+      print('❌ Araç reddediliyor: ${vehicle['plate']} - Sebep: $reason');
+
+      // 1. ÖNCE REDDETME İŞLEMİNİ YAP
       await _dbService.rejectVehicle(
         vehicle['id'].toString(),
-        currentUser?['id']?.toString() ?? '',
+        userId,
         reason,
       );
 
+      print('✅ Reddetme başarılı: ${vehicle['plate']}');
+
+      // 2. SADECE MANUEL OLARAK LİSTEDEN KALDIR - YENİDEN YÜKLEME YAPMA!
+      if (mounted) {
+        setState(() {
+          _pendingVehicles.removeWhere((v) => v['id'] == vehicle['id']);
+        });
+        print('✅ Manuel olarak listeden kaldırıldı: ${vehicle['plate']}');
+        print('✅ Kalan bekleyen araç sayısı: ${_pendingVehicles.length}');
+      }
+
       _showSnackBar('${vehicle['plate']} başvurusu reddedildi', Colors.orange);
-      _loadPendingVehicles();
+
     } catch (e) {
-      _showSnackBar('Reddetme hatası: $e', Colors.red);
+      print('❌ Reddetme hatası: $e');
+      _showSnackBar('Reddetme hatası: ${e.toString()}', Colors.red);
+
+      // Hata durumunda listeyi yeniden yükle
+      if (mounted) {
+        await _loadPendingVehicles();
+      }
     }
   }
+
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text('Onay Bekleyen Araçlar (${_pendingVehicles.length})'),
         backgroundColor: Color(0xFFE3F2FD),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.refresh),
+            onPressed: _loadPendingVehicles,
+            tooltip: 'Yenile',
+          ),
+        ],
       ),
-      body: _isLoading ? _buildLoading() : _buildPendingList(),
+      body: _isLoading
+          ? _buildLoading()
+          : _pendingVehicles.isEmpty
+          ? _buildEmptyState()
+          : _buildPendingList(),
     );
   }
 
-  Widget _buildLoading() => Center(child: CircularProgressIndicator());
+  Widget _buildLoading() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 16),
+          Text('Onay bekleyen araçlar yükleniyor...'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.check_circle_outline, size: 64, color: Colors.green),
+          SizedBox(height: 16),
+          Text(
+            'Tüm araçlar onaylandı!',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Onay bekleyen yeni araç başvurusu bulunmuyor.',
+            style: TextStyle(color: Colors.grey[600]),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildPendingList() {
-    if (_pendingVehicles.isEmpty) {
-      return Center(child: Text('Onay bekleyen araç bulunmuyor'));
-    }
-
-    return ListView.builder(
-      itemCount: _pendingVehicles.length,
-      itemBuilder: (context, index) {
-        final vehicle = _pendingVehicles[index];
-        return _buildVehicleApprovalCard(vehicle);
-      },
+    return RefreshIndicator(
+      onRefresh: _loadPendingVehicles,
+      child: ListView.builder(
+        padding: EdgeInsets.all(8),
+        itemCount: _pendingVehicles.length,
+        itemBuilder: (context, index) {
+          final vehicle = _pendingVehicles[index];
+          return _buildVehicleApprovalCard(vehicle);
+        },
+      ),
     );
   }
 
   // Onay kartına red butonu ekle
   Widget _buildVehicleApprovalCard(Map<String, dynamic> vehicle) {
-    return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _dbService.getVehicleSchools(vehicle['id']),
-      builder: (context, snapshot) {
-        final schools = snapshot.data ?? [];
+    return Card(
+      margin: EdgeInsets.all(8),
+      child: ExpansionTile(
+        title: Text(vehicle['plate'], style: TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text('${vehicle['driver_name']} - ${vehicle['model']}'),
+        leading: Icon(Icons.pending, color: Colors.orange),
+        children: [
+          Padding(
+            padding: EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ... araç bilgileri ...
 
-        return Card(
-          margin: EdgeInsets.all(8),
-          child: ExpansionTile(
-            title: Text(vehicle['plate'], style: TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text('${vehicle['driver_name']} - ${vehicle['model']}'),
-            leading: Icon(Icons.pending, color: Colors.orange),
-            children: [
-              Padding(
-                padding: EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                SizedBox(height: 16),
+                Row(
                   children: [
-                    // ... mevcut araç bilgileri
-
-                    SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () => _approveVehicle(vehicle),
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                            child: Text('ONAYLA'),
-                          ),
-                        ),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () => _rejectVehicle(vehicle),
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                            child: Text('REDDET'),
-                          ),
-                        ),
-                      ],
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => _approveVehicle(vehicle), // DOĞRUDAN ONAYLA
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                        child: Text('ONAYLA'),
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => _rejectVehicle(vehicle), // DOĞRUDAN REDDET
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                        child: Text('REDDET'),
+                      ),
                     ),
                   ],
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
-
 
 
 
@@ -277,17 +383,37 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
           ]),
 
           // Bağlı Okullar
+          // Bağlı Okullar kısmını düzeltelim
           FutureBuilder<List<Map<String, dynamic>>>(
             future: _dbService.getVehicleSchools(vehicle['id']),
             builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                );
+              }
+
+              if (snapshot.hasError) {
+                print('❌ Okul bilgisi yükleme hatası: ${snapshot.error}');
+                return _buildDetailCard('Başvuru Yapan Okullar', [
+                  Text('Okul bilgileri yüklenemedi', style: TextStyle(color: Colors.grey)),
+                ]);
+              }
+
               final schools = snapshot.data ?? [];
               if (schools.isNotEmpty) {
                 return _buildDetailCard('Başvuru Yapan Okullar', [
-                  ...schools.map((vs) =>
-                      Text('• ${vs['schools']['name']} - ${vs['schools']['district']}')
-                  ).toList(),
+                  ...schools.map((vs) {
+                    final school = vs['schools'] is Map ? vs['schools'] : {};
+                    return Padding(
+                      padding: EdgeInsets.symmetric(vertical: 2),
+                      child: Text('• ${school['name'] ?? 'Bilinmeyen'} - ${school['district'] ?? ''}'),
+                    );
+                  }).toList(),
                 ]);
               }
+
               return SizedBox();
             },
           ),
@@ -300,7 +426,7 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
               Expanded(
                 child: ElevatedButton(
                   onPressed: () {
-                    Navigator.pop(context);
+                    Navigator.pop(context); // SADECE POPUP'ı KAPAT
                     _approveVehicle(vehicle);
                   },
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
@@ -311,8 +437,8 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
               Expanded(
                 child: ElevatedButton(
                   onPressed: () {
-                    Navigator.pop(context);
-                    _rejectVehicle(vehicle);
+                    Navigator.pop(context); // SADECE POPUP'ı KAPAT
+                    _rejectVehicle(vehicle); // REDDETME DIALOG'U AÇ
                   },
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
                   child: Text('REDDET'),
@@ -409,7 +535,12 @@ class _VehicleApprovalScreenState extends State<VehicleApprovalScreen> {
 
   void _showSnackBar(String message, [Color color = Colors.blue]) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: color),
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        duration: Duration(seconds: 3), // 3 saniye göster
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 }

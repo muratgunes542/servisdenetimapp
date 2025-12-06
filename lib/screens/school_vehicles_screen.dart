@@ -1,3 +1,4 @@
+//school_vehicles_screen.dart
 import 'package:flutter/material.dart';
 import '../models/vehicle.dart';
 import '/services/database_service.dart';
@@ -267,7 +268,7 @@ class _SchoolVehiclesScreenState extends State<SchoolVehiclesScreen> {
 
             // Bağlı Okullar
             FutureBuilder<List<Map<String, dynamic>>>(
-              future: _dbService.getVehicleSchools(vehicle['id']?.toString() ?? ''),
+              future: _dbService.getVehicleSchools(vehicle['id'] ?? 0), // int değer gönder
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return Card(
@@ -278,28 +279,53 @@ class _SchoolVehiclesScreenState extends State<SchoolVehiclesScreen> {
                   );
                 }
 
-                final schools = snapshot.data ?? [];
-                if (schools.isNotEmpty) {
+                if (snapshot.hasError) {
                   return Card(
                     child: Padding(
                       padding: EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Bağlı Okullar', style: TextStyle(fontWeight: FontWeight.bold)),
-                          SizedBox(height: 8),
-                          ...schools.map((vs) =>
-                              Padding(
-                                padding: EdgeInsets.only(bottom: 4),
-                                child: Text('• ${vs['schools']?['name']?.toString() ?? 'İsimsiz'} - ${vs['schools']?['district']?.toString() ?? 'Bölge Yok'}'),
-                              )
-                          ).toList(),
-                        ],
-                      ),
+                      child: Text('Okul bilgileri yüklenirken hata oluştu'),
                     ),
                   );
                 }
-                return SizedBox();
+
+                final vehicleSchools = snapshot.data ?? [];
+
+                return Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Bağlı Okullar',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        if (vehicleSchools.isEmpty)
+                          Text(
+                            'Bu aracın bağlı olduğu okul bulunmuyor',
+                            style: TextStyle(color: Colors.grey),
+                          )
+                        else
+                          Column(
+                            children: vehicleSchools.map((vs) {
+                              final school = vs['schools'] ?? {};
+                              return ListTile(
+                                leading: Icon(Icons.school, color: Colors.blue),
+                                title: Text(school['name'] ?? 'Bilinmeyen Okul'),
+                                subtitle: Text(school['district'] ?? ''),
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                              );
+                            }).toList(),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
               },
             ),
 
@@ -451,11 +477,19 @@ class _SchoolVehiclesScreenState extends State<SchoolVehiclesScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => VehicleEditScreen(vehicle: vehicle),
+        builder: (context) => VehicleEditScreen(
+          vehicle: vehicle,
+        ),
       ),
-    ).then((success) {
-      if (success == true) {
+    ).then((refresh) {
+      if (refresh == true) {
         _loadVehicles();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Araç bilgileri güncellendi'),
+            backgroundColor: Colors.green,
+          ),
+        );
       }
     });
   }
